@@ -1,0 +1,6 @@
+.claude/
+.remember/
+.env
+*.code-workspace
+*.tar.gz
+.DS_Store
