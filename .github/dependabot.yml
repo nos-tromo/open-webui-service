@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # Pinned upstream Open WebUI image in docker/compose.yaml
+  # (ghcr.io/open-webui/open-webui:<tag>@sha256:<digest>). Dependabot reads
+  # `image:` keys in compose files, so it opens a PR bumping the tag and digest
+  # together when a new release ships — the main update this wrapper cares about.
+  # (data-plane omits this: its DB images are pull-only and deliberately not
+  # auto-bumped; here the pinned image is the whole point of the repo.)
+  - package-ecosystem: docker
+    directory: "/docker"
+    schedule:
+      interval: weekly
+  # Reusable-workflow refs (@v2) and any actions used under .github/workflows.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
