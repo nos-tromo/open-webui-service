@@ -11,24 +11,26 @@ services:
         compress: "true"
     container_name: open-webui
     environment:
+      NO_PROXY: "backend,frontend,localhost,127.0.0.1,172.16.0.0/12,10.0.0.0/8${EXTRA_NO_PROXY:-}"
+      no_proxy: "backend,frontend,localhost,127.0.0.1,172.16.0.0/12,10.0.0.0/8${EXTRA_NO_PROXY:-}"
       # This app ships NO bundled inference provider. It reaches inference
       # ONLY over the OpenAI-compatible API below — exactly like the other
       # consumers (docint, chorus, Nextext, translator). The endpoint is
       # swappable by env: vllm-service's LiteLLM proxy (alias 'vllm-router'),
       # or any other OpenAI-compatible server (e.g. Ollama's /v1).
-      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-http://vllm-router:4000/v1}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-sk-1234567890}
+      OPENAI_API_BASE_URL: ${OPENAI_API_BASE_URL:-http://vllm-router:4000/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-1234567890}
       # Default chat model auto-selected for new chats. Uses the stack-wide
       # TEXT_MODEL convention (the chat model id registered on the endpoint);
       # empty => Open WebUI falls back to auto-selecting the first model.
-      - DEFAULT_MODELS=${TEXT_MODEL:-}
+      DEFAULT_MODELS: ${TEXT_MODEL:-}
       # Hard-disable Open WebUI's built-in Ollama provider. Inference must go
       # through OPENAI_API_BASE_URL only — never a second, bundled backend.
-      - ENABLE_OLLAMA_API=false
+      ENABLE_OLLAMA_API: false
       # Make .env the single source of truth: do not let admin-UI changes
       # persist to the DB and shadow these vars. Keeps the endpoint swappable
       # by editing .env + restart, matching the stack's env-driven config.
-      - ENABLE_PERSISTENT_CONFIG=false
+      ENABLE_PERSISTENT_CONFIG: false
       # Embeddings run through the same OpenAI-compatible endpoint — NOT a local
       # model. The standard image otherwise loads sentence-transformers in-process
       # and pulls it from HuggingFace at boot; this removes that bundled provider.
@@ -37,10 +39,10 @@ services:
       # serves it as `bge-m3:latest`, vllm-service as `BAAI/bge-m3` — so EMBED_MODEL
       # must match the active OPENAI_API_BASE_URL (set it per provider, like the
       # other consumers). Fallback is the Ollama tag.
-      - RAG_EMBEDDING_ENGINE=openai
-      - RAG_EMBEDDING_MODEL=${EMBED_MODEL:-bge-m3:latest}
-      - RAG_OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-http://vllm-router:4000/v1}
-      - RAG_OPENAI_API_KEY=${OPENAI_API_KEY:-sk-1234567890}
+      RAG_EMBEDDING_ENGINE: openai
+      RAG_EMBEDDING_MODEL: ${EMBED_MODEL:-bge-m3:latest}
+      RAG_OPENAI_API_BASE_URL: ${OPENAI_API_BASE_URL:-http://vllm-router:4000/v1}
+      RAG_OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-1234567890}
       # Speech-to-text via the endpoint, so no local Whisper is bundled. Open
       # WebUI does NOT inherit OPENAI_API_BASE_URL for STT — its built-in default
       # is the literal api.openai.com (config.py reassigns the var) — so the base
@@ -50,15 +52,15 @@ services:
       # endpoint (no STT), set WHISPER_API_BASE in .env to the CPU asr-only stack
       # (http://asr-only:8000/v1). AUDIO_STT_MODEL shares the stack's WHISPER_MODEL,
       # so it auto-matches whatever the asr endpoint serves.
-      - AUDIO_STT_ENGINE=openai
-      - AUDIO_STT_OPENAI_API_BASE_URL=${WHISPER_API_BASE:-${OPENAI_API_BASE_URL:-http://vllm-router:4000/v1}}
-      - AUDIO_STT_OPENAI_API_KEY=${WHISPER_API_KEY:-${OPENAI_API_KEY:-sk-1234567890}}
-      - AUDIO_STT_MODEL=${WHISPER_MODEL:-openai/whisper-large-v3}
+      AUDIO_STT_ENGINE: openai
+      AUDIO_STT_OPENAI_API_BASE_URL: ${WHISPER_API_BASE:-${OPENAI_API_BASE_URL:-http://vllm-router:4000/v1}}
+      AUDIO_STT_OPENAI_API_KEY: ${WHISPER_API_KEY:-${OPENAI_API_KEY:-sk-1234567890}}
+      AUDIO_STT_MODEL: ${WHISPER_MODEL:-openai/whisper-large-v3}
       # Airgap: never fetch models/weights from HuggingFace at runtime, and
       # disable upstream update checks. With embeddings external, nothing local
       # needs downloading.
-      - OFFLINE_MODE=true
-      - HF_HUB_OFFLINE=1
+      OFFLINE_MODE: true
+      HF_HUB_OFFLINE: 1
     env_file:
       - path: ../.env
         required: false
