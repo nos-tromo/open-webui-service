@@ -24,7 +24,6 @@ OPEN_WEBUI_VOLUME := open-webui-data
 
 COMPOSE     := docker compose --env-file .env -f docker/compose.yaml
 COMPOSE_DEV := docker compose --env-file .env -f docker/compose.yaml -f docker/compose.override.yaml
-TS          := $(shell date -u +%Y%m%dT%H%M%SZ)
 
 .PHONY: help network volume pull bundle up up-dev stop down restart logs ps health nuke
 
@@ -71,15 +70,15 @@ volume:
 pull:
 	$(COMPOSE) pull
 
-# Save the pinned image as a versioned airgap tarball for transfer to an
-# offline host. Mirrors the *-pulled-*.tar.gz convention of the stack's
-# other pulled-image services.
-bundle: pull
-	@img=$$($(COMPOSE) config --images | head -n1); \
-	  out="open-webui-pulled-$(TS).tar.gz"; \
-	  echo ">> saving $$img -> $$out"; \
-	  docker save "$$img" | gzip > "$$out"; \
-	  echo ">> wrote $$out"
+# Save the pinned image as a versioned airgap tarball for transfer to an offline
+# host. Delegates to scripts/bundle_images.sh, which re-tags the image
+# (name:tag@digest -> name:tag) before `docker save` via the stack-shared,
+# CI-drift-checked scripts/bundle-lib.sh — so the digest-pinned `image:` in
+# compose.yaml resolves after `docker load` (a plain `docker save` of the
+# name:tag@digest ref does not). Mirrors the *-pulled-*.tar.gz convention of the
+# stack's other pulled-image services; the script runs its own `pull`.
+bundle:
+	./scripts/bundle_images.sh
 
 # Start in production shape: detached, no host ports — reachable only on
 # inference-net (e.g. behind a reverse proxy on that network).

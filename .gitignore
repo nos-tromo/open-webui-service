@@ -4,3 +4,6 @@
 *.code-workspace
 *.tar.gz
 .DS_Store
+
+# Airgap bundle artifacts (produced by scripts/bundle_images.sh)
+.open-webui-version
