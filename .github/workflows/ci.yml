@@ -20,6 +20,6 @@ jobs:
     # shellcheck jobs find no matching files and skip, since there is no
     # Dockerfile (the upstream image is pinned, not built) and no scripts/. No
     # compose profiles are used here, so only compose-files is passed.
-    uses: nos-tromo/.github/.github/workflows/infra-validation.yml@v2
+    uses: nos-tromo/.github/.github/workflows/infra-validation.yml@v3
     with:
       compose-files: '-f docker/compose.yaml -f docker/compose.override.yaml'
