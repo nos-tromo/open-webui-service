@@ -73,7 +73,7 @@ services:
 
 volumes:
   # External so app teardown (even `docker compose down -v`) can never delete
-  # user data. Created out-of-band by `make volume`; removed only by `make
+  # user data. Created out-of-band by `make volumes`; removed only by `make
   # nuke`. Keep the name in sync with the Makefile (OPEN_WEBUI_VOLUME).
   open-webui-data:
     external: true
