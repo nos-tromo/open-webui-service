@@ -20,7 +20,7 @@ To run Open WebUI usefully, `inference-net` must exist and an upstream OpenAI-co
 
 **No bundled inference provider.** Like the sibling consumers, this app reaches inference *only* over the OpenAI-compatible API; the upstream image's own backends are hard-disabled in `compose.yaml`. The built-in Ollama integration is off (`ENABLE_OLLAMA_API=false`); RAG embeddings go to the same endpoint (`RAG_EMBEDDING_ENGINE=openai`, model `RAG_EMBEDDING_MODEL`) instead of the image's in-process sentence-transformers; STT goes to the endpoint (`AUDIO_STT_ENGINE=openai`) instead of local Whisper; and `OFFLINE_MODE=true` + `HF_HUB_OFFLINE=1` block any runtime model download from HuggingFace. Net: no local models load, and the only inference traffic leaves via `OPENAI_API_BASE_URL`.
 
-Persistence: **external** volume `open-webui-data` → `/app/backend/data` (SQLite DB, users, chats, uploads, RAG vectors). Declared `external: true` in `compose.yaml`, it is created out-of-band by `make volume` (like the network) and survives every app teardown — even `docker compose down -v`; only `make nuke` removes it (container `down`, then `docker volume rm`). Destroying it wipes all app state.
+Persistence: **external** volume `open-webui-data` → `/app/backend/data` (SQLite DB, users, chats, uploads, RAG vectors). Declared `external: true` in `compose.yaml`, it is created out-of-band by `make volumes` (like the network) and survives every app teardown — even `docker compose down -v`; only `make nuke` removes it (container `down`, then `docker volume rm`). Destroying it wipes all app state.
 
 ## Compose layout
 
@@ -37,7 +37,7 @@ The `Makefile` (run from the repo root) is the operator interface; `make help` l
 cp .env.example .env     # first-time setup — REQUIRED (--env-file .env must exist)
 
 make network             # create the external inference-net if missing (idempotent)
-make volume              # create the external open-webui-data volume if missing (idempotent)
+make volumes             # create the external open-webui-data volume if missing (idempotent)
 make pull                # pull the pinned upstream image
 make up                  # start, detached, production shape (no host ports)
 make up-dev              # like 'up', but publishes the UI on ${OPEN_WEBUI_HOST_PORT:-3000}

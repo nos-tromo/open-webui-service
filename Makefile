@@ -5,7 +5,7 @@
 # docker/compose.yaml). It runs as the chat UI on the shared, external
 # `inference-net` and speaks the OpenAI API to an OpenAI-compatible endpoint
 # on that network (the LiteLLM proxy from vllm-service). All state lives in
-# the external `open-webui-data` volume, created out-of-band by `make volume`.
+# the external `open-webui-data` volume, created out-of-band by `make volumes`.
 #
 # Requires a .env at the repo root (compose is invoked with --env-file .env).
 # Copy it from the example first:  cp .env.example .env
@@ -25,7 +25,7 @@ OPEN_WEBUI_VOLUME := open-webui-data
 COMPOSE     := docker compose --env-file .env -f docker/compose.yaml
 COMPOSE_DEV := docker compose --env-file .env -f docker/compose.yaml -f docker/compose.override.yaml
 
-.PHONY: help network volume pull bundle up up-dev stop down restart logs ps health nuke
+.PHONY: help network volumes pull bundle up up-dev stop down restart logs ps health nuke
 
 help:
 	@echo "open-webui-service — Open WebUI chat UI on inference-net."
@@ -35,7 +35,7 @@ help:
 	@echo
 	@echo "Lifecycle:"
 	@echo "  make network    create the external $(INFERENCE_NET) if missing"
-	@echo "  make volume     create the external $(OPEN_WEBUI_VOLUME) if missing"
+	@echo "  make volumes    create the external $(OPEN_WEBUI_VOLUME) if missing"
 	@echo "  make pull       pull the pinned upstream image"
 	@echo "  make bundle     save the pinned image as an airgap .tar.gz"
 	@echo "  make up         start open-webui (production shape, no host ports)"
@@ -60,8 +60,10 @@ network:
 
 # Create the external data volume (one-time per host; idempotent). Declared
 # external in compose.yaml so app teardown — even `down -v` — can never delete
-# user data; only `make nuke` removes it, explicitly.
-volume:
+# user data; only `make nuke` removes it, explicitly. Named `volumes` (plural)
+# to match the federation `setup` contract (deploy runs `make network volumes`
+# across members), though this service has just the one volume.
+volumes:
 	@docker volume inspect $(OPEN_WEBUI_VOLUME) >/dev/null 2>&1 \
 	  || (echo ">> creating external volume $(OPEN_WEBUI_VOLUME)" \
 	      && docker volume create $(OPEN_WEBUI_VOLUME))
@@ -82,12 +84,12 @@ bundle:
 
 # Start in production shape: detached, no host ports — reachable only on
 # inference-net (e.g. behind a reverse proxy on that network).
-up: network volume
+up: network volumes
 	$(COMPOSE) up --no-build -d
 
 # Like 'up' but layers compose.override.yaml to publish the UI port
 # (OPEN_WEBUI_HOST_PORT, default 3000) on the host.
-up-dev: network volume
+up-dev: network volumes
 	$(COMPOSE_DEV) up --no-build -d
 
 # Stop the container without removing it.

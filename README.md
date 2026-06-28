@@ -28,7 +28,7 @@ goes out via `OPENAI_API_BASE_URL`.
 
 - Docker Engine with the Compose v2 plugin (`docker compose`, not `docker-compose`).
 - The external `inference-net` network (created by `make network`, idempotent).
-- The external `open-webui-data` volume (created by `make volume`, idempotent) —
+- The external `open-webui-data` volume (created by `make volumes`, idempotent) —
   all app state lives here, kept out of the compose project so teardown can't
   delete it.
 - A reachable OpenAI-compatible endpoint on that network. Normally **bring up
@@ -42,7 +42,7 @@ cp .env.example .env        # REQUIRED — compose runs with --env-file .env
 # edit .env: set OPENAI_API_BASE_URL / OPENAI_API_KEY and the model ids
 
 make network                # create inference-net    (idempotent; up/up-dev also do this)
-make volume                 # create open-webui-data   (idempotent; up/up-dev also do this)
+make volumes                # create open-webui-data   (idempotent; up/up-dev also do this)
 make pull                   # pull the pinned upstream image
 make up-dev                 # start, publishing the UI on the host
 ```
@@ -63,7 +63,7 @@ wraps `docker compose --env-file .env -f docker/compose.yaml …` so the root
 | Target        | Does |
 |---------------|------|
 | `make network`| Create the external `inference-net` if missing (idempotent). |
-| `make volume` | Create the external `open-webui-data` volume if missing (idempotent). |
+| `make volumes` | Create the external `open-webui-data` volume if missing (idempotent). |
 | `make pull`   | Pull the pinned upstream image. |
 | `make up`     | Start detached, production shape — **no host ports**. |
 | `make up-dev` | Like `up`, but publishes the UI on `${OPEN_WEBUI_HOST_PORT:-3000}`. |
@@ -113,7 +113,7 @@ restarting — not in the UI.
 All application state — the SQLite DB (users, chats, settings), uploaded files,
 and RAG vectors — lives in the Docker volume **`open-webui-data`**, mounted at
 `/app/backend/data`. It is declared `external` in `compose.yaml` and created
-out-of-band by `make volume` (like the network), so it is owned by the host, not
+out-of-band by `make volumes` (like the network), so it is owned by the host, not
 the compose project: **app teardown can never delete it** — not `make down`, not
 `make restart`, not even a raw `docker compose down -v`. Only `make nuke` removes
 it (container `down`, then `docker volume rm`, behind an interactive confirm);
