@@ -12,6 +12,12 @@ screenshots. It applies everywhere git sees — source code, tests, fixtures,
 docs, examples, configs, commit messages, and CI files. Use fully synthetic,
 invented placeholders instead.
 
+**Likewise, NEVER expose local filepaths from development machines** —
+absolute paths or home directories such as `/Users/<name>/...`,
+`/home/<name>/...`, or `C:\Users\...` — anywhere git sees. The only
+permitted paths are relative project paths starting from the project's
+root (e.g. `docker/compose.yaml`).
+
 ## What this repo is
 
 A thin **deployment wrapper** for [Open WebUI](https://github.com/open-webui/open-webui) — no application source lives here. The repo is Docker Compose config (`docker/`) plus a small vendored airgap bundler (`scripts/`), running a pinned upstream image (`ghcr.io/open-webui/open-webui`, pinned by tag **and** sha256 digest). Changes here are config/ops changes, not code changes.
