@@ -61,6 +61,11 @@ services:
       # needs downloading.
       OFFLINE_MODE: true
       HF_HUB_OFFLINE: 1
+      # Single sign-on: trust the identity the edge gateway injects after
+      # Authelia forward-auth. The gateway strips these headers from
+      # clients, so they cannot be forged from outside edge-net.
+      WEBUI_AUTH_TRUSTED_EMAIL_HEADER: X-Auth-Email
+      WEBUI_AUTH_TRUSTED_NAME_HEADER: X-Auth-User
     env_file:
       - path: ../.env
         required: false
@@ -70,6 +75,9 @@ services:
       inference-net:
         aliases:
           - open-webui-client
+      edge-net:
+        aliases:
+          - open-webui
 
 volumes:
   # External so app teardown (even `docker compose down -v`) can never delete
@@ -82,3 +90,6 @@ networks:
   inference-net:
     external: true
     name: ${INFERENCE_NET:-inference-net}
+  edge-net:
+    external: true
+    name: ${EDGE_NET:-edge-net}

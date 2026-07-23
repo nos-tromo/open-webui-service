@@ -54,6 +54,27 @@ the admin.
 For production, use `make up` instead — same service with **no published host
 ports**, reachable only on `inference-net` (e.g. behind a reverse proxy there).
 
+## Access — production SSO via the edge gateway
+
+In production, users never hit Open WebUI directly. It joins the external
+`edge-net` network (alias `open-webui`) alongside the sibling app
+frontends, and the federation's `edge-plane` gateway is the only path in:
+TLS termination + Authelia forward-auth, with the authenticated identity
+injected as `X-Auth-Email` / `X-Auth-User`. `compose.yaml` sets
+`WEBUI_AUTH_TRUSTED_EMAIL_HEADER` / `WEBUI_AUTH_TRUSTED_NAME_HEADER` to
+those headers, so a gateway-authenticated request auto-logs-in the
+matching account and Open WebUI's own login screen never appears —
+**Authelia is the only login**. The bundled Open WebUI auth is bypassed
+via the trusted header, not disabled, so this service must never be
+reachable on any network/port that skips the gateway's `forward_auth` —
+doing so would let a client forge the identity header directly.
+
+Because the upstream image has no base-path support, Open WebUI is not
+served under a gateway sub-path like the other apps; it gets its own
+gateway port instead — `https://<EDGE_HOST>:8443/` (see the `edge-plane`
+repo's `caddy/Caddyfile`). `make network` creates `edge-net` alongside
+`inference-net` (idempotent, mirrors the existing target).
+
 ## Operations
 
 Run everything via `make` from the repo root (`make help` lists all targets). It
