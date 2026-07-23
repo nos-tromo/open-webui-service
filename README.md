@@ -67,7 +67,7 @@ matching account and Open WebUI's own login screen never appears —
 **Authelia is the only login**. The bundled Open WebUI auth is bypassed
 via the trusted header, not disabled, so this service must never be
 reachable on any network/port that skips the gateway's `forward_auth` —
-doing so would let a client forge the identity header directly.
+doing so would let a client forge the identity header directly. Note: Open WebUI grants its local admin role to the first identity that ever signs in on a fresh `open-webui-data` volume; later identities arrive as regular users (`DEFAULT_USER_ROLE=user`).
 
 Because the upstream image has no base-path support, Open WebUI is not
 served under a gateway sub-path like the other apps; it gets its own
