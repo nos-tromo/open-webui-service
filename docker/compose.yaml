@@ -70,6 +70,10 @@ services:
       # would default to 'pending' and need admin approval — pointless
       # behind Authelia, which is the real gate. Auto-activate instead.
       DEFAULT_USER_ROLE: user
+      # Cap the app's own JWT lifetime: Authelia's sign-out ends the
+      # gateway session but cannot invalidate this token, so on shared
+      # machines a stale token could outlive the gateway session.
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
     env_file:
       - path: ../.env
         required: false
