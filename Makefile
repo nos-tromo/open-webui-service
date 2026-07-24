@@ -17,6 +17,12 @@ SHELL := /usr/bin/env bash
 # Keep in sync with docker/compose.yaml (networks.inference-net.name).
 INFERENCE_NET ?= $(or $(strip $(shell test -f .env && grep -E '^INFERENCE_NET=' .env | cut -d= -f2)),inference-net)
 
+# The edge gateway's network (edge-plane). Open WebUI joins it under the
+# alias `open-webui` so the gateway can reach it directly (trusted-header
+# SSO — see docker/compose.yaml environment / CLAUDE.md). Keep in sync with
+# docker/compose.yaml (networks.edge-net.name).
+EDGE_NET ?= $(or $(strip $(shell test -f .env && grep -E '^EDGE_NET=' .env | cut -d= -f2)),edge-net)
+
 # External data volume. Declared `external: true` in docker/compose.yaml, so it
 # must be created out-of-band (like the network) and survives `down`/`down -v`.
 # Keep in sync with docker/compose.yaml (volumes.open-webui-data).
@@ -34,7 +40,7 @@ help:
 	@echo "  cp .env.example .env   # then set OPENAI_API_BASE_URL / OPENAI_API_KEY"
 	@echo
 	@echo "Lifecycle:"
-	@echo "  make network    create the external $(INFERENCE_NET) if missing"
+	@echo "  make network    create the external $(INFERENCE_NET) and $(EDGE_NET) if missing"
 	@echo "  make volumes    create the external $(OPEN_WEBUI_VOLUME) if missing"
 	@echo "  make pull       pull the pinned upstream image"
 	@echo "  make bundle     save the pinned image as an airgap .tar.gz"
@@ -52,11 +58,14 @@ help:
 	@echo "Note: OPENAI_API_BASE_URL must resolve on $(INFERENCE_NET);"
 	@echo "the vllm-service LiteLLM proxy is reachable there as 'vllm-router'."
 
-# Create the shared external network (one-time per host; idempotent).
+# Create the shared external networks (one-time per host; idempotent).
 network:
 	@docker network inspect $(INFERENCE_NET) >/dev/null 2>&1 \
 	  || (echo ">> creating external network $(INFERENCE_NET)" \
 	      && docker network create $(INFERENCE_NET))
+	@docker network inspect $(EDGE_NET) >/dev/null 2>&1 \
+	  || (echo ">> creating external network $(EDGE_NET)" \
+	      && docker network create $(EDGE_NET))
 
 # Create the external data volume (one-time per host; idempotent). Declared
 # external in compose.yaml so app teardown — even `down -v` — can never delete

@@ -38,6 +38,32 @@ To run Open WebUI usefully, `inference-net` must exist and an upstream OpenAI-co
 
 Persistence: **external** volume `open-webui-data` → `/app/backend/data` (SQLite DB, users, chats, uploads, RAG vectors). Declared `external: true` in `compose.yaml`, it is created out-of-band by `make volumes` (like the network) and survives every app teardown — even `docker compose down -v`; only `make nuke` removes it (container `down`, then `docker volume rm`). Destroying it wipes all app state.
 
+## Access — edge gateway SSO
+
+Open WebUI is never reached directly by users; it sits behind the
+federation's edge gateway (`edge-plane`) on the external `edge-net`
+network, joined under the alias `open-webui`. The gateway terminates TLS,
+enforces Authelia forward-auth, and — after successful login — injects
+`X-Auth-Email` / `X-Auth-User` on the proxied request. `compose.yaml` wires
+`WEBUI_AUTH_TRUSTED_EMAIL_HEADER=X-Auth-Email` and
+`WEBUI_AUTH_TRUSTED_NAME_HEADER=X-Auth-User`, so Open WebUI trusts that
+header instead of its own bundled login: an authenticated gateway session
+auto-creates/logs in the matching Open WebUI account and the app's native
+login screen is never shown. **Authelia is the only login** — the
+bundled Open WebUI auth is bypassed entirely via the trusted header, not
+disabled; do not expose this service on any network/port a client can
+reach without first passing through the gateway's `forward_auth`, or the
+trusted header becomes forgeable.
+
+Open WebUI has no base-path / sub-path support (confirmed empirically —
+its built-in frontend serves root-absolute asset paths, e.g. `/_app/...`,
+`/static/...`, with no `WEBUI_BASE_URL`-style rewrite hook in
+`open_webui/env.py`), so unlike the path-prefixed apps (`/chorus`,
+`/docint`, …) it cannot live under `/webui` on the shared `:443` site. The
+gateway instead gives it a **dedicated port**, `:8443` (see `edge-plane`'s
+`caddy/Caddyfile`); the shared site's `/webui` route just redirects there.
+Reachable at `https://<EDGE_HOST>:8443/` once both stacks are up.
+
 ## Compose layout
 
 Operate via `make` from the repo root — the `Makefile` wraps `docker compose --env-file .env -f docker/compose.yaml` and mirrors the sibling infra services' schema. Two compose files:
