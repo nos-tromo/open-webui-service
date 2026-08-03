@@ -2,7 +2,7 @@ name: open-webui-service
 
 services:
   open-webui:
-    image: ghcr.io/open-webui/open-webui:0.10.2@sha256:9fcea9c6e32ab60b0498f3986c6cdf651ddbe61db48d2213a3d28048ddd673d4
+    image: ghcr.io/open-webui/open-webui:0.11.0@sha256:72c0ba641ba75e7aa52655cb242570906ececd09b1140fb736483038a22b3228
     logging:
       driver: "local"
       options:
@@ -31,6 +31,14 @@ services:
       # persist to the DB and shadow these vars. Keeps the endpoint swappable
       # by editing .env + restart, matching the stack's env-driven config.
       ENABLE_PERSISTENT_CONFIG: false
+      # 0.11.0 hides connection models that have no per-model access-control
+      # entry from non-admin users (utils/models.py: "only admins can see
+      # unconfigured models"). Every user here is a non-admin auto-created via
+      # the trusted header, and access is already gated by Authelia at the
+      # edge, so restore the pre-0.11 default: all users see all endpoint
+      # models. Without this the model picker is empty for everyone but the
+      # first (admin) user.
+      BYPASS_MODEL_ACCESS_CONTROL: true
       # Embeddings run through the same OpenAI-compatible endpoint — NOT a local
       # model. The standard image otherwise loads sentence-transformers in-process
       # and pulls it from HuggingFace at boot; this removes that bundled provider.
