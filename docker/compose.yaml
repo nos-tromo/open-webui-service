@@ -3,6 +3,21 @@ name: open-webui-service
 services:
   open-webui:
     image: ghcr.io/open-webui/open-webui:0.11.0@sha256:72c0ba641ba75e7aa52655cb242570906ececd09b1140fb736483038a22b3228
+    # Container hardening (deploy ADR 0001). The image defaults to root;
+    # run it as the federation's app uid instead. All durable writes land
+    # on open-webui-data (which existing hosts must chown -R 10001:10001
+    # once — AFTER the first mount, which re-copies image content
+    # root-owned into an empty volume). read_only: the app's boot-time
+    # copy of branding assets into its static dir fails non-fatally
+    # (logged ERRORs, stock assets served from the image) — accepted.
+    user: "10001:10001"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
     logging:
       driver: "local"
       options:
@@ -13,6 +28,12 @@ services:
     environment:
       NO_PROXY: "backend,frontend,localhost,127.0.0.1,172.16.0.0/12,10.0.0.0/8${EXTRA_NO_PROXY:-}"
       no_proxy: "backend,frontend,localhost,127.0.0.1,172.16.0.0/12,10.0.0.0/8${EXTRA_NO_PROXY:-}"
+      # Non-root + read_only support: the image's HOME=/root is unwritable
+      # for uid 10001, and start.sh would otherwise generate its secret key
+      # in the (read-only) working directory. Persisting the key on the
+      # data volume also keeps sessions valid across container recreation.
+      HOME: /tmp
+      WEBUI_SECRET_KEY_FILE: /app/backend/data/.webui_secret_key
       # This app ships NO bundled inference provider. It reaches inference
       # ONLY over the OpenAI-compatible API below — exactly like the other
       # consumers (docint, chorus, Nextext, translator). The endpoint is
