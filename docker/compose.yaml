@@ -1,13 +1,50 @@
 name: open-webui-service
 
 services:
+  ##########################################################
+  # Volume ownership (deploy ADR 0001, self-healing)
+  #
+  # open-webui runs as uid 10001 (user: override below; the image
+  # defaults to root), but the external volume keeps whatever ownership
+  # it was created with — including the root-owned copy the image writes
+  # into an empty volume on first mount. This one-shot root container
+  # fixes ownership before the app starts; it reuses the same pinned
+  # image (anchor) so the airgap bundle needs no extra image. The find
+  # form only touches wrong-owner entries. Canonical shape:
+  # docint/docker/compose.yaml.
+  ##########################################################
+  volume-permissions:
+    image: &open-webui-image ghcr.io/open-webui/open-webui:0.11.0@sha256:72c0ba641ba75e7aa52655cb242570906ececd09b1140fb736483038a22b3228
+    user: "0:0"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    network_mode: none
+    logging:
+      driver: "local"
+      options:
+        max-size: "50m"
+        max-file: "5"
+        compress: "true"
+    # Root is the mountpoint itself — its parent dirs live on the
+    # read-only image rootfs and must not (and cannot) be chowned.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        find /app/backend/data
+        -xdev ! -user 10001 -exec chown -h 10001:10001 {} +
+    volumes:
+      - open-webui-data:/app/backend/data
+    restart: "no"
+
   open-webui:
-    image: ghcr.io/open-webui/open-webui:0.11.0@sha256:72c0ba641ba75e7aa52655cb242570906ececd09b1140fb736483038a22b3228
+    image: *open-webui-image
     # Container hardening (deploy ADR 0001). The image defaults to root;
     # run it as the federation's app uid instead. All durable writes land
-    # on open-webui-data (which existing hosts must chown -R 10001:10001
-    # once — AFTER the first mount, which re-copies image content
-    # root-owned into an empty volume). read_only: the app's boot-time
+    # on open-webui-data (ownership is self-healed by the volume-permissions
+    # one-shot below on every up — including the root-owned re-copy a first
+    # mount writes into an empty volume). read_only: the app's boot-time
     # copy of branding assets into its static dir fails non-fatally
     # (logged ERRORs, stock assets served from the image) — accepted.
     user: "10001:10001"
@@ -114,6 +151,9 @@ services:
         required: false
     volumes:
       - open-webui-data:/app/backend/data
+    depends_on:
+      volume-permissions:
+        condition: service_completed_successfully
     networks:
       inference-net:
         aliases:
