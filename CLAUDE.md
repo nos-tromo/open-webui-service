@@ -108,6 +108,16 @@ A single `.env` at the **repo root** (copy from `.env.example`) drives everythin
 
 ## Gotchas (verified)
 
+- **Container hardening (deploy ADR 0001).** The service runs as
+  `user: 10001:10001` with a read-only rootfs, `no-new-privileges`,
+  `cap_drop: ALL` and a `/tmp` tmpfs. `HOME=/tmp` (the image's `/root` is
+  unwritable) and `WEBUI_SECRET_KEY_FILE` lives on the data volume — which
+  also keeps sessions valid across container recreation. Two verified
+  consequences: (1) on an **empty** `open-webui-data` volume the first mount
+  copies image content in root-owned, so the one-time
+  `chown -R 10001:10001` must happen **after** that first mount; (2) at every
+  boot the app fails (non-fatally, logged as ERROR) to copy branding assets
+  into its read-only static dir — stock assets serve fine from the image.
 - **`.env` is authoritative, the UI is not.** `compose.yaml` sets `ENABLE_PERSISTENT_CONFIG=false`, so connection/model settings load from env every boot and admin-UI "Connections" edits **do not persist** across a restart. Change the endpoint or models by editing `.env`, then restart — not in the UI. (Open WebUI's default is the opposite: UI edits get written to the SQLite config table and *shadow* env; this deployment turns that off on purpose, so the upstream image's `OPENAI_API_BASE_URL=http://litellm:4000/v1` default is overridden cleanly to `vllm-router` here.)
 - **Shell env beats `.env` for `${...}` interpolation.** The stack exports model-selection vars (`TEXT_MODEL`, `EMBED_MODEL`, …) in your shell (`~/.zshrc`), and docker-compose prefers the shell over `--env-file .env` when interpolating. So `DEFAULT_MODELS` follows the *exported* `TEXT_MODEL` (e.g. `gemma4:31b-cloud`), and any `TEXT_MODEL` set in this repo's `.env` is ignored while the shell var is set. Change the default by changing the stack-wide export (shared with the other consumers), not just `.env`.
 - **`make restart` drops the host port.** `restart` = `down` + `up`, and `up` is the production shape with **no published ports**. For local access use `make down && make up-dev` instead.
