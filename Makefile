@@ -46,6 +46,7 @@ help:
 	@echo "  make bundle     save the pinned image as an airgap .tar.gz"
 	@echo "  make up         start open-webui (production shape, no host ports)"
 	@echo "  make up-dev     like 'up', but publishes the UI port on the host"
+	@echo "  make stop       stop the container without removing it"
 	@echo "  make down       stop + remove the container (data volume preserved)"
 	@echo "  make restart    down + up"
 	@echo "  make nuke       DESTROY the open-webui-data volume (interactive)"
