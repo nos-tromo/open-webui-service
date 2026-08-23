@@ -27,7 +27,9 @@ goes out via `OPENAI_API_BASE_URL`.
 ## Prerequisites
 
 - Docker Engine with the Compose v2 plugin (`docker compose`, not `docker-compose`).
-- The external `inference-net` network (created by `make network`, idempotent).
+- The external `inference-net` **and `edge-net`** networks (both created by
+  `make network`, idempotent). `edge-net` is declared `external: true`, so a
+  missing one makes `make up` fail.
 - The external `open-webui-data` volume (created by `make volumes`, idempotent) —
   all app state lives here, kept out of the compose project so teardown can't
   delete it.
@@ -41,7 +43,7 @@ goes out via `OPENAI_API_BASE_URL`.
 cp .env.example .env        # REQUIRED — compose runs with --env-file .env
 # edit .env: set OPENAI_API_BASE_URL / OPENAI_API_KEY and the model ids
 
-make network                # create inference-net    (idempotent; up/up-dev also do this)
+make network                # create inference-net + edge-net (idempotent; up/up-dev also do this)
 make volumes                # create open-webui-data   (idempotent; up/up-dev also do this)
 make pull                   # pull the pinned upstream image
 make up-dev                 # start, publishing the UI on the host
@@ -78,7 +80,7 @@ wraps `docker compose --env-file .env -f docker/compose.yaml …` so the root
 
 | Target        | Does |
 |---------------|------|
-| `make network`| Create the external `inference-net` if missing (idempotent). |
+| `make network`| Create the external `inference-net` and `edge-net` if missing (idempotent). |
 | `make volumes` | Create the external `open-webui-data` volume if missing (idempotent). |
 | `make pull`   | Pull the pinned upstream image. |
 | `make up`     | Start detached, production shape — **no host ports**. |
@@ -103,7 +105,9 @@ mandatory before any target.
 | `TEXT_MODEL`           | Chat model auto-selected for new chats (→ `DEFAULT_MODELS`). | empty (UI auto-selects) |
 | `EMBED_MODEL`          | Embedding model for RAG (→ `RAG_EMBEDDING_MODEL`). | `bge-m3:latest` |
 | `WHISPER_API_BASE`     | Separate STT endpoint. Unset ⇒ follows `OPENAI_API_BASE_URL`. | — |
-| `INFERENCE_NET`        | Name of the shared external network. | `inference-net` |
+| `INFERENCE_NET`        | Name of the shared inference network. | `inference-net` |
+| `EDGE_NET`             | Name of the shared gateway network the SPA is reached over. | `edge-net` |
+| `EDGE_HOST`            | Gateway hostname; builds the post-sign-out redirect (`WEBUI_AUTH_SIGNOUT_REDIRECT_URL`). | `localhost` |
 | `OPEN_WEBUI_HOST_PORT` | Host port for `make up-dev`. | `3000` |
 
 Model ids must name models the endpoint actually serves, and the same model
