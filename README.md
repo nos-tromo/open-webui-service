@@ -56,24 +56,19 @@ ports**, reachable only on `inference-net` (e.g. behind a reverse proxy there).
 
 ## Access — production SSO via the edge gateway
 
-In production, users never hit Open WebUI directly. It joins the external
-`edge-net` network (alias `open-webui`) alongside the sibling app
-frontends, and the federation's `edge-plane` gateway is the only path in:
-TLS termination + Authelia forward-auth, with the authenticated identity
-injected as `X-Auth-Email` / `X-Auth-User`. `compose.yaml` sets
-`WEBUI_AUTH_TRUSTED_EMAIL_HEADER` / `WEBUI_AUTH_TRUSTED_NAME_HEADER` to
-those headers, so a gateway-authenticated request auto-logs-in the
-matching account and Open WebUI's own login screen never appears —
-**Authelia is the only login**. The bundled Open WebUI auth is bypassed
-via the trusted header, not disabled, so this service must never be
-reachable on any network/port that skips the gateway's `forward_auth` —
-doing so would let a client forge the identity header directly. Note: Open WebUI grants its local admin role to the first identity that ever signs in on a fresh `open-webui-data` volume; later identities arrive as regular users (`DEFAULT_USER_ROLE=user`).
+In production users never reach Open WebUI directly. It joins the external
+`edge-net` network as alias `open-webui`, and the `edge-plane` gateway is the
+only path in — TLS plus Authelia forward-auth, identity injected as
+`X-Auth-Email` / `X-Auth-User`, which `compose.yaml` maps onto Open WebUI's
+trusted-header variables. Authelia is the only login screen.
 
-Because the upstream image has no base-path support, Open WebUI is not
-served under a gateway sub-path like the other apps; it gets its own
-gateway port instead — `https://<EDGE_HOST>:8443/` (see the `edge-plane`
-repo's `caddy/Caddyfile`). `make network` creates `edge-net` alongside
-`inference-net` (idempotent, mirrors the existing target).
+The bundled auth is bypassed via that header, not disabled, so this service
+must never be reachable on a network or port that skips the gateway's
+`forward_auth`. Having no base-path support upstream, it gets its own gateway
+port rather than a sub-path: `https://<EDGE_HOST>:8443/`.
+
+See [`CLAUDE.md`](./CLAUDE.md) § Access — edge gateway SSO for the
+first-account admin rule and the full header contract.
 
 ## Operations
 
@@ -111,34 +106,27 @@ mandatory before any target.
 | `INFERENCE_NET`        | Name of the shared external network. | `inference-net` |
 | `OPEN_WEBUI_HOST_PORT` | Host port for `make up-dev`. | `3000` |
 
-Model ids follow the **stack-wide naming convention** and must name models the
-endpoint actually serves. The same id can differ per provider — e.g. the embed
-model is `bge-m3:latest` on Ollama but `BAAI/bge-m3` on `vllm-service` — so set
-them to match the active `OPENAI_API_BASE_URL`.
+Model ids must name models the endpoint actually serves, and the same model
+carries different ids per provider — `bge-m3:latest` on Ollama,
+`BAAI/bge-m3` on `vllm-service` — so set them to match the active
+`OPENAI_API_BASE_URL`.
 
-**Provider switch.** The model ids and endpoints are exported stack-wide in your
-shell (e.g. `~/.bashrc` / `~/.zshrc`), shared with the sibling consumers
-(`docint`, `chorus`, `Nextext`, `translator`). Compose interpolation **prefers
-those shell exports over `.env`**, which keeps the whole stack pointed at one
-provider at a time. To switch backends (vLLM ↔ Ollama), change the exported vars
-(and any provider-specific entries in `.env`), then `make up` / `make up-dev`.
-
-**`.env` is authoritative, the UI is not.** `compose.yaml` sets
-`ENABLE_PERSISTENT_CONFIG=false`, so connection/model settings load from env on
-every boot and admin-UI "Connections" edits **do not persist** across a restart.
-Change the endpoint or models by editing `.env` (or the shell exports) and
-restarting — not in the UI.
+Two behaviours worth knowing before you debug a setting that will not stick:
+shell exports shared across the sibling consumers **win over `.env`** (that is
+what keeps the whole stack on one provider at a time), and **`.env` is
+authoritative over the UI** — `ENABLE_PERSISTENT_CONFIG=false` means admin-UI
+"Connections" edits do not survive a restart. Both are spelled out in
+[`CLAUDE.md`](./CLAUDE.md) § Configuration and § Gotchas.
 
 ## Persistence
 
-All application state — the SQLite DB (users, chats, settings), uploaded files,
-and RAG vectors — lives in the Docker volume **`open-webui-data`**, mounted at
-`/app/backend/data`. It is declared `external` in `compose.yaml` and created
-out-of-band by `make volumes` (like the network), so it is owned by the host, not
-the compose project: **app teardown can never delete it** — not `make down`, not
-`make restart`, not even a raw `docker compose down -v`. Only `make nuke` removes
-it (container `down`, then `docker volume rm`, behind an interactive confirm);
-doing so wipes every account, chat, and document.
+All application state — the SQLite DB (users, chats, settings), uploaded
+files, RAG vectors — lives in the external Docker volume `open-webui-data`,
+mounted at `/app/backend/data`. Being `external`, it is owned by the host
+rather than the compose project, so no teardown can delete it: not `make
+down`, not `make restart`, not a raw `docker compose down -v`. Only `make
+nuke` removes it, behind an interactive confirm, and that wipes every account,
+chat and document.
 
 ## Updating the image
 
@@ -171,6 +159,16 @@ runtime.
 ```
 
 `.env`, `*.code-workspace`, `.claude/`, and `.remember/` are git-ignored.
+
+## Documentation
+
+- [`CLAUDE.md`](./CLAUDE.md) — architecture rationale, the compose layout, the
+  verified gotcha list, and how the image's bundled providers are hard-disabled.
+- Sibling repos: inference from
+  [vllm-service](https://github.com/nos-tromo/vllm-service), the gateway from
+  [edge-plane](https://github.com/nos-tromo/edge-plane), ordered bring-up from
+  [deploy](https://github.com/nos-tromo/deploy).
+- Questions and bugs: <https://github.com/nos-tromo/open-webui-service/issues>
 
 ## License
 
