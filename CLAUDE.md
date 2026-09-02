@@ -18,6 +18,10 @@ absolute paths or home directories such as `/Users/<name>/...`,
 permitted paths are relative project paths starting from the project's
 root (e.g. `docker/compose.yaml`).
 
+## Planning
+
+For any non-trivial change (>1 file or any root-cause fix), present a plan and wait for approval BEFORE editing code. Do not start with Edit/Write on a fresh investigation.
+
 ## What this repo is
 
 A thin **deployment wrapper** for [Open WebUI](https://github.com/open-webui/open-webui) — no application source lives here. The repo is Docker Compose config (`docker/`) plus a small vendored airgap bundler (`scripts/`), running a pinned upstream image (`ghcr.io/open-webui/open-webui`, pinned by tag **and** sha256 digest). Changes here are config/ops changes, not code changes.
@@ -125,3 +129,18 @@ A single `.env` at the **repo root** (copy from `.env.example`) drives everythin
 - **STT endpoint is separate from chat.** `AUDIO_STT_OPENAI_API_BASE_URL` does *not* inherit `OPENAI_API_BASE_URL` — Open WebUI's built-in default is the literal `api.openai.com` (config.py reassigns the singular var after seeding the real `OPENAI_API_BASE_URLS`). `compose.yaml` wires it to `${WHISPER_API_BASE:-${OPENAI_API_BASE_URL:-…}}`, so STT follows the chat endpoint by default (production `vllm-router` fronts the `asr` backend) and you redirect it with `WHISPER_API_BASE` (e.g. the CPU `asr-only` stack `http://asr-only:8000/v1` when chat is on Ollama). `AUDIO_STT_MODEL` shares the stack's `WHISPER_MODEL`, so it auto-matches what the asr endpoint serves.
 - **Ollama cloud models need auth.** When `OPENAI_API_BASE_URL` points at an Ollama whose model list includes `*-cloud` entries, those won't run until that Ollama is signed in (`docker exec -it ollama ollama signin`); unauthenticated, Ollama strips `-cloud` and returns `404 model not found`. Note `TEXT_MODEL`/`DEFAULT_MODELS` may itself be a `*-cloud` model, so the first chat fails until signin. Local models and embeddings are unaffected.
 - **Airgap bundles re-tag before `docker save` — they do _not_ drop the digest.** `compose.yaml` pins the image by `name:tag@digest`. A plain `docker save name:tag@digest` loads back *without* a usable `name:tag` binding, so on an offline host compose can't resolve the pinned reference and falls through to a registry pull — `failed to resolve reference … @sha256 …` / `dial tcp: lookup ghcr.io … server misbehaving`. `make bundle` avoids this by delegating to `scripts/bundle_images.sh` → the stack-shared, CI-drift-checked `scripts/bundle-lib.sh` (`bundle_retag`: `docker tag name@digest name:tag` **before** save), so the tarball loads back with **both** bindings and the digest pin stays intact. Offline flow is just `docker load -i open-webui-pulled-*.tar.gz` then the **normal** `make up` / `make up-dev` — no compose override, exactly like the siblings and the `deploy` aggregator's `make load`. (`--no-build` does *not* suppress a registry pull, so always `docker load` first.) `scripts/bundle-lib.sh` is vendored verbatim from `nos-tromo/.github`; don't hand-edit it (CI fails on drift).
+
+## Git & PR Workflow
+
+- Never commit directly to `main`; always branch (`feat/`, `fix/`) and open a PR.
+- Never create a NEW PR when an existing PR for the work is open — push additional commits to that branch.
+- Release order is strict: bump VERSION file -> commit -> tag. Never tag before the VERSION bump.
+- Use single, non-compound shell commands for `gh` operations (no `&&` chains); if `gh pr merge` is blocked, fall back to the GitHub MCP merge tool.
+
+## Verification
+
+Before claiming a check is green, run the actual command and paste the output. `git ls-files` does not cover untracked files — use `pre-commit run --all-files`. After opening a PR, confirm CI actually triggered on the latest push before declaring done.
+
+## Communication Style
+
+Keep changes minimal and scoped. Do not add explanatory code comments for trivial or self-evident changes. Do not overwrite existing test files with Write — use Edit to append or modify tests.
