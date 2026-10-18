@@ -134,8 +134,10 @@ chat and document.
 
 ## Updating the image
 
-The image is pinned by tag **and** digest in `docker/compose.yaml`. To update,
-bump both the tag and the `@sha256:` digest on the `image:` line, then:
+The image is pinned by tag **and** digest in `docker/compose.yaml`, written out
+on both services that run it (`volume-permissions` and `open-webui`). Dependabot
+proposes new releases as a PR that bumps tag and digest on both lines. To update
+by hand, bump both lines together, then:
 
 ```bash
 make pull && make up        # or up-dev

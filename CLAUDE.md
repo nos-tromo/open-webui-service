@@ -108,7 +108,7 @@ A single `.env` at the **repo root** (copy from `.env.example`) drives everythin
 
 **Provider switch.** The stack-wide model ids and endpoints are exported in your shell (`~/.bashrc` / `~/.zshrc`) — `TEXT_MODEL`, `EMBED_MODEL`, `WHISPER_MODEL`, `OPENAI_API_BASE_URL`, and the chat/STT endpoints — shared with every sibling consumer. Compose interpolation takes those shell exports over `.env`, so the whole stack stays pinned to one provider at a time (Ollama serves the embed model as `bge-m3:latest`, vllm-service as `BAAI/bge-m3`, etc.). To switch backends, change the exports (and any provider-specific entries in `.env`), then `make up-dev` / `make up`.
 
-**Updating the image:** bump the tag and the `@sha256:` digest on the `image:` line in `compose.yaml`, then `make pull && make up` (or `up-dev`).
+**Updating the image:** Dependabot (`docker-compose` ecosystem) opens a PR bumping the tag and `@sha256:` digest on both `image:` lines in `compose.yaml` (`volume-permissions` and `open-webui` run the same image; the ref is repeated literally because Dependabot cannot rewrite a value behind a YAML anchor, so keep the two identical). By hand: bump both lines, then `make pull && make up` (or `up-dev`).
 
 ## Gotchas (verified)
 
