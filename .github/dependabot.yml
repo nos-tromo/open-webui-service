@@ -1,4 +1,11 @@
 version: 2
+# Every update waits 7 days after its upstream release before Dependabot
+# proposes it, so a compromised or broken release is usually caught upstream
+# first. Security updates are exempt and still open immediately. Our own
+# nos-tromo/* workflows skip the wait, so a hub release is not held back.
+# Dependabot can only date Docker Hub images: refreshes of images from other
+# registries (ghcr.io, ...) are proposed without the wait, which is where the
+# shared CI's signed-provenance check carries the weight.
 updates:
   # Pinned upstream Open WebUI image in docker/compose.yaml
   # (ghcr.io/open-webui/open-webui:<tag>@sha256:<digest>). Dependabot reads
@@ -10,8 +17,14 @@ updates:
     directory: "/docker"
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
   # Reusable-workflow refs (@v2) and any actions used under .github/workflows.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
+      exclude:
+        - "nos-tromo/*"
