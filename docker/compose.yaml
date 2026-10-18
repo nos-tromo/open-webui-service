@@ -17,7 +17,7 @@ services:
   # docint/docker/compose.yaml.
   ##########################################################
   volume-permissions:
-    image: ghcr.io/open-webui/open-webui:0.11.1@sha256:6bb1fbe8ab0a3e0456067f493044ffb66a30a65a34be47f6a5862176a370dd16
+    image: ghcr.io/open-webui/open-webui:v0.12.3@sha256:a537bbe1e6b428820f52ed4a029d7fff97062e24d5cf32c365fba36fd0542def
     user: "0:0"
     read_only: true
     security_opt:
@@ -42,7 +42,7 @@ services:
     restart: "no"
 
   open-webui:
-    image: ghcr.io/open-webui/open-webui:0.11.1@sha256:6bb1fbe8ab0a3e0456067f493044ffb66a30a65a34be47f6a5862176a370dd16
+    image: ghcr.io/open-webui/open-webui:v0.12.3@sha256:a537bbe1e6b428820f52ed4a029d7fff97062e24d5cf32c365fba36fd0542def
     # Container hardening (deploy ADR 0001). The image defaults to root;
     # run it as the federation's app uid instead. All durable writes land
     # on open-webui-data (ownership is self-healed by the volume-permissions
