@@ -9,12 +9,15 @@ services:
   # it was created with — including the root-owned copy the image writes
   # into an empty volume on first mount. This one-shot root container
   # fixes ownership before the app starts; it reuses the same pinned
-  # image (anchor) so the airgap bundle needs no extra image. The find
-  # form only touches wrong-owner entries. Canonical shape:
+  # image so the airgap bundle needs no extra image. The ref is written
+  # out on both services rather than through a YAML anchor, because
+  # Dependabot cannot rewrite a value behind an anchor: keep the two
+  # lines identical. The find form only touches wrong-owner entries.
+  # Canonical shape:
   # docint/docker/compose.yaml.
   ##########################################################
   volume-permissions:
-    image: &open-webui-image ghcr.io/open-webui/open-webui:0.11.1@sha256:6bb1fbe8ab0a3e0456067f493044ffb66a30a65a34be47f6a5862176a370dd16
+    image: ghcr.io/open-webui/open-webui:0.11.1@sha256:6bb1fbe8ab0a3e0456067f493044ffb66a30a65a34be47f6a5862176a370dd16
     user: "0:0"
     read_only: true
     security_opt:
@@ -39,7 +42,7 @@ services:
     restart: "no"
 
   open-webui:
-    image: *open-webui-image
+    image: ghcr.io/open-webui/open-webui:0.11.1@sha256:6bb1fbe8ab0a3e0456067f493044ffb66a30a65a34be47f6a5862176a370dd16
     # Container hardening (deploy ADR 0001). The image defaults to root;
     # run it as the federation's app uid instead. All durable writes land
     # on open-webui-data (ownership is self-healed by the volume-permissions

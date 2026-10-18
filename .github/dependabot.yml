@@ -8,18 +8,20 @@ version: 2
 # shared CI's signed-provenance check carries the weight.
 updates:
   # Pinned upstream Open WebUI image in docker/compose.yaml
-  # (ghcr.io/open-webui/open-webui:<tag>@sha256:<digest>). Dependabot reads
-  # `image:` keys in compose files, so it opens a PR bumping the tag and digest
-  # together when a new release ships — the main update this wrapper cares about.
-  # (data-plane omits this: its DB images are pull-only and deliberately not
-  # auto-bumped; here the pinned image is the whole point of the repo.)
-  - package-ecosystem: docker
+  # (ghcr.io/open-webui/open-webui:<tag>@sha256:<digest>) — the main update this
+  # wrapper cares about. The docker-compose ecosystem reads compose `image:`
+  # keys and opens one PR bumping tag and digest together on both services that
+  # run the image. (The docker ecosystem reads only Dockerfiles, of which this
+  # repo has none, so it failed every run.) data-plane omits this: its DB
+  # images are pull-only and deliberately not auto-bumped; here the pinned
+  # image is the whole point of the repo.
+  - package-ecosystem: docker-compose
     directory: "/docker"
     schedule:
       interval: weekly
     cooldown:
       default-days: 7
-  # Reusable-workflow refs (@v2) and any actions used under .github/workflows.
+  # Reusable-workflow refs and any actions used under .github/workflows.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
