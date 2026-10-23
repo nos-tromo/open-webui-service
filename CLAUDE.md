@@ -92,7 +92,8 @@ make ps                  # container status   (also: make health)
 make down                # stop + remove container (data volume preserved)
 make restart             # down + up
 make nuke                # DESTROY open-webui-data — all state (interactive confirm)
-make bundle              # save the pinned image as an airgap *.tar.gz
+make bundle              # save the latest release tag's pinned image as an airgap *.tar.gz (HEAD stays on the tag)
+make bundle-dev          # same, from the current working tree
 ```
 
 `up`/`up-dev` are detached and auto-create the network and the external data volume. To bypass make, replicate its flags exactly — `docker compose --env-file .env -f docker/compose.yaml [...]` from the repo root; a bare `docker compose` from `docker/` won't load the root `.env` the same way.
