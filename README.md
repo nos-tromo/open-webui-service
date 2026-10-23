@@ -89,7 +89,8 @@ wraps `docker compose --env-file .env -f docker/compose.yaml …` so the root
 | `make restart`| `down` + `up` (⚠ see gotcha — drops the host port). |
 | `make logs`   | Tail the container logs. |
 | `make ps` / `make health` | Container status. |
-| `make bundle` | Save the pinned image as an airgap `*.tar.gz`. |
+| `make bundle` | Save the pinned image of the latest release tag as an airgap `*.tar.gz` (leaves HEAD on that tag). |
+| `make bundle-dev` | Same, from the current working tree. |
 | `make nuke`   | **Destroy** the `open-webui-data` volume — all state (interactive confirm). |
 
 ## Configuration
@@ -145,9 +146,12 @@ make pull && make up        # or up-dev
 
 ## Airgap delivery
 
-`make bundle` runs `pull` and writes the pinned image to a versioned
-`open-webui-pulled-<timestamp>.tar.gz`, matching the stack's pulled-image
-convention. Copy it to the offline host and `docker load < <file>`, then bring
+`make bundle` checks out the latest annotated release tag, runs `pull`, and
+writes the pinned image to a versioned `open-webui-pulled-vX.Y.Z.tar.gz`,
+matching the stack's pulled-image convention. On success HEAD stays on that
+tag, so the repo files match the bundle; `git switch main` returns. It refuses
+on uncommitted changes to tracked files or when no tag is reachable;
+`make bundle-dev` bundles the working tree instead (`<date>-<sha>` version). Copy it to the offline host and `docker load < <file>`, then bring
 the service up there. Nothing in this deployment fetches models or telemetry at
 runtime.
 

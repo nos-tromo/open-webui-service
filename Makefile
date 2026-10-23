@@ -31,7 +31,7 @@ OPEN_WEBUI_VOLUME := open-webui-data
 COMPOSE     := docker compose --env-file .env -f docker/compose.yaml
 COMPOSE_DEV := docker compose --env-file .env -f docker/compose.yaml -f docker/compose.override.yaml
 
-.PHONY: help network volumes pull bundle up up-dev stop down restart logs ps health nuke
+.PHONY: help network volumes pull bundle bundle-dev up up-dev stop down restart logs ps health nuke
 
 help:
 	@echo "open-webui-service — Open WebUI chat UI on inference-net."
@@ -43,7 +43,8 @@ help:
 	@echo "  make network    create the external $(INFERENCE_NET) and $(EDGE_NET) if missing"
 	@echo "  make volumes    create the external $(OPEN_WEBUI_VOLUME) if missing"
 	@echo "  make pull       pull the pinned upstream image"
-	@echo "  make bundle     save the pinned image as an airgap .tar.gz"
+	@echo "  make bundle     save the pinned image of the latest release tag as an airgap .tar.gz"
+	@echo "  make bundle-dev same, from the current working tree (date+sha version)"
 	@echo "  make up         start open-webui (production shape, no host ports)"
 	@echo "  make up-dev     like 'up', but publishes the UI port on the host"
 	@echo "  make stop       stop the container without removing it"
@@ -89,8 +90,14 @@ pull:
 # compose.yaml resolves after `docker load` (a plain `docker save` of the
 # name:tag@digest ref does not). Mirrors the *-pulled-*.tar.gz convention of the
 # stack's other pulled-image services; the script runs its own `pull`.
+# `bundle` is the release path: it checks out the latest annotated tag reachable
+# from HEAD and leaves HEAD there on success (refusing on a dirty tree or with
+# no tag). `bundle-dev` bundles the current working tree instead.
 bundle:
 	./scripts/bundle_images.sh
+
+bundle-dev:
+	BUNDLE_DEV=1 ./scripts/bundle_images.sh
 
 # Start in production shape: detached, no host ports — reachable only on
 # inference-net (e.g. behind a reverse proxy on that network).
