@@ -139,6 +139,30 @@ services:
       # would default to 'pending' and need admin approval — pointless
       # behind Authelia, which is the real gate. Auto-activate instead.
       DEFAULT_USER_ROLE: user
+      # Audit trail: one record per authenticated API request (account, verb,
+      # URI, source IP, model) at METADATA level, i.e. without request or
+      # response bodies, so no chat content. The upstream defaults skip the
+      # chat and folder routes and every GET, which are exactly the edits
+      # and reads of stored chats, so both are switched back on. Records go
+      # to stdout with the container logs; the file sink is off so no second,
+      # never-pruned copy accumulates on the data volume.
+      AUDIT_LOG_LEVEL: METADATA
+      ENABLE_AUDIT_STDOUT: true
+      ENABLE_AUDIT_LOGS_FILE: false
+      AUDIT_EXCLUDED_PATHS: ""
+      ENABLE_AUDIT_GET_REQUESTS: true
+      # Admins do not read or export other users' chats, see other users'
+      # workspace content (knowledge, prompts, tools) by default, or share
+      # anything to the public community site.
+      ENABLE_ADMIN_CHAT_ACCESS: false
+      ENABLE_ADMIN_EXPORT: false
+      BYPASS_ADMIN_ACCESS_CONTROL: false
+      ENABLE_COMMUNITY_SHARING: false
+      # The image already sets these; pinned here so an upstream default
+      # change cannot switch telemetry back on.
+      SCARF_NO_ANALYTICS: true
+      DO_NOT_TRACK: true
+      ANONYMIZED_TELEMETRY: false
       # Cap the app's own JWT lifetime: Authelia's sign-out ends the
       # gateway session but cannot invalidate this token. Renewal is
       # silent via the trusted headers while the gateway session lives,
