@@ -74,6 +74,12 @@ services:
       # data volume also keeps sessions valid across container recreation.
       HOME: /tmp
       WEBUI_SECRET_KEY_FILE: /app/backend/data/.webui_secret_key
+      # Loopback only: edge-guard, which shares this network namespace, is
+      # the only listener on :8080 and so the only way in. It passes the
+      # identity headers on only with the gateway's secret (see the
+      # edge-guard service and nginx/edge-guard.conf.template).
+      HOST: 127.0.0.1
+      PORT: "8081"
       # This app ships NO bundled inference provider. It reaches inference
       # ONLY over the OpenAI-compatible API below — exactly like the other
       # consumers (docint, chorus, Nextext, translator). The endpoint is
@@ -188,6 +194,45 @@ services:
       edge-net:
         aliases:
           - open-webui
+
+  ##########################################################
+  # edge-guard — the only listener in open-webui's network
+  # namespace (network_mode below), so it owns :8080 on both
+  # networks and the dev host port. Open WebUI trusts the
+  # identity headers but cannot check where they came from;
+  # this nginx forwards them only when X-Edge-Secret matches
+  # OPEN_WEBUI_EDGE_SECRET, the value the edge gateway sends.
+  # Unset secret: headers pass as before. Config:
+  # nginx/edge-guard.conf.template.
+  ##########################################################
+  edge-guard:
+    image: docker.io/nginxinc/nginx-unprivileged:1.31-alpine@sha256:b5047b9b76845eac124358373c6852377c52e4b05834a47647e955dd91cb8f1e
+    network_mode: "service:open-webui"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # nginx (unprivileged image, uid 101) writes pid/temp under /tmp; the
+    # entrypoint renders the template into /etc/nginx/conf.d at startup
+    # (mode=1777: the tmpfs shadows the image dir root-owned).
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+      - /etc/nginx/conf.d:size=1m,mode=1777
+    logging:
+      driver: "local"
+      options:
+        max-size: "50m"
+        max-file: "5"
+        compress: "true"
+    environment:
+      # Always defined (possibly empty): envsubst leaves an undefined
+      # variable's ${...} literally in the config.
+      OPEN_WEBUI_EDGE_SECRET: ${OPEN_WEBUI_EDGE_SECRET:-}
+    volumes:
+      - ../nginx/edge-guard.conf.template:/etc/nginx/templates/default.conf.template:ro
+    depends_on:
+      - open-webui
 
 volumes:
   # External so app teardown (even `docker compose down -v`) can never delete

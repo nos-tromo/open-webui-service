@@ -64,10 +64,13 @@ only path in — TLS plus Authelia forward-auth, identity injected as
 `X-Auth-Email` / `X-Auth-User`, which `compose.yaml` maps onto Open WebUI's
 trusted-header variables. Authelia is the only login screen.
 
-The bundled auth is bypassed via that header, not disabled, so this service
-must never be reachable on a network or port that skips the gateway's
-`forward_auth`. Having no base-path support upstream, it gets its own gateway
-port rather than a sub-path: `https://<EDGE_HOST>:8443/`.
+The bundled auth is bypassed via that header, not disabled. Because the
+container also sits on `inference-net`, a small nginx sidecar (`edge-guard`)
+is the only listener in front of it. It forwards the identity headers only
+when the request carries the gateway's secret (`OPEN_WEBUI_EDGE_SECRET`, the
+same value as in edge-plane's `.env`). Having no base-path support upstream,
+Open WebUI gets its own gateway port rather than a sub-path:
+`https://<EDGE_HOST>:8443/`.
 
 See [`CLAUDE.md`](./CLAUDE.md) § Access — edge gateway SSO for the
 first-account admin rule and the full header contract.
@@ -167,8 +170,10 @@ Admins cannot read or export other users' chats. Details:
 ```
 .
 ├── docker/
-│   ├── compose.yaml            # base service (production shape, no host ports)
+│   ├── compose.yaml            # base services (production shape, no host ports)
 │   └── compose.override.yaml   # dev overlay: publishes the UI port
+├── nginx/
+│   └── edge-guard.conf.template  # sidecar: identity headers only with the gateway's secret
 ├── Makefile                    # operator interface (see `make help`)
 ├── .env.example                # copy to .env
 ├── CLAUDE.md                   # architecture, internals, gotchas
