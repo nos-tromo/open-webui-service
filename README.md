@@ -155,6 +155,13 @@ on uncommitted changes to tracked files or when no tag is reachable;
 the service up there. Nothing in this deployment fetches models or telemetry at
 runtime.
 
+## Audit log
+
+Every authenticated API request writes one audit record (account, verb, URI,
+source IP, model id; never a request or response body) to the container log.
+Admins cannot read or export other users' chats. Details:
+[`CLAUDE.md`](./CLAUDE.md) § Architecture.
+
 ## Layout
 
 ```
