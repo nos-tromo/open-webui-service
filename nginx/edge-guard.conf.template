@@ -1,0 +1,65 @@
+# edge-guard: the only listener in Open WebUI's network namespace.
+#
+# Open WebUI logs users in from X-Auth-Email / X-Auth-User (trusted-header
+# SSO) but cannot tell who sent them, and it sits on inference-net, where any
+# container could otherwise reach it with forged headers. So Open WebUI
+# listens on 127.0.0.1:8081 only, and this nginx, sharing its network
+# namespace, takes :8080. It passes the identity headers on only when
+# X-Edge-Secret equals OPEN_WEBUI_EDGE_SECRET (sent by the edge gateway) and
+# drops them otherwise. With the secret unset, both sides are empty and every
+# request passes them, as before this guard existed.
+#
+# Rendered by the image's entrypoint: envsubst replaces only defined
+# environment variables, so nginx's own $variables stay as they are.
+# compose always defines OPEN_WEBUI_EDGE_SECRET (possibly empty) for that
+# reason.
+
+log_format scrubbed '$time_iso8601 "$request_method $uri $server_protocol" '
+                    '$status $body_bytes_sent $request_time "$http_x_request_id"';
+
+map $edge_verified $owui_auth_email  { 1 $http_x_auth_email;  default ""; }
+map $edge_verified $owui_auth_user   { 1 $http_x_auth_user;   default ""; }
+map $edge_verified $owui_auth_groups { 1 $http_x_auth_groups; default ""; }
+map $edge_verified $owui_auth_name   { 1 $http_x_auth_name;   default ""; }
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ""      close;
+}
+
+server {
+    listen 8080;
+    server_tokens off;
+    access_log /var/log/nginx/access.log scrubbed;
+
+    # Uploads and long chats pass straight through, as they did without
+    # this guard.
+    client_max_body_size 0;
+
+    # Exact, case-sensitive string comparison.
+    set $edge_verified 0;
+    if ($http_x_edge_secret = "${OPEN_WEBUI_EDGE_SECRET}") {
+        set $edge_verified 1;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        # socket.io
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        # An empty value makes nginx omit the header, so an unverified
+        # request reaches Open WebUI without any identity header.
+        proxy_set_header X-Auth-Email $owui_auth_email;
+        proxy_set_header X-Auth-User $owui_auth_user;
+        proxy_set_header X-Auth-Groups $owui_auth_groups;
+        proxy_set_header X-Auth-Name $owui_auth_name;
+        proxy_set_header X-Edge-Secret "";
+        # Streaming responses (token streams, SSE) and uploads unbuffered.
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+}

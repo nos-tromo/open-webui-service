@@ -57,9 +57,26 @@ header instead of its own bundled login: an authenticated gateway session
 auto-creates/logs in the matching Open WebUI account and the app's native
 login screen is never shown. **Authelia is the only login** — the
 bundled Open WebUI auth is bypassed entirely via the trusted header, not
-disabled; do not expose this service on any network/port a client can
-reach without first passing through the gateway's `forward_auth`, or the
-trusted header becomes forgeable.
+disabled.
+
+**edge-guard keeps that header unforgeable.** The container is also on
+`inference-net`, where any other container could reach it, and Open WebUI
+cannot check where a header came from. So Open WebUI listens on
+`127.0.0.1:8081` only (`HOST`/`PORT` in `compose.yaml`), and the
+`edge-guard` service, an `nginx-unprivileged` sidecar with
+`network_mode: "service:open-webui"`, is the only listener on `:8080` in
+that shared network namespace. Both networks and the dev host port therefore
+reach the guard, never Open WebUI directly. The guard forwards the identity
+headers only when `X-Edge-Secret` equals `OPEN_WEBUI_EDGE_SECRET`, the value
+the edge gateway sends (edge-plane's `docs/identity-contract.md`).
+Otherwise it drops them, and the request reaches Open WebUI with no identity.
+It always strips `X-Edge-Secret`, proxies WebSockets (socket.io) and
+streams unbuffered. With the secret unset it forwards the headers as before
+(legacy). Config: `nginx/edge-guard.conf.template`, rendered by the image's
+envsubst, which is why compose always defines the variable, even when empty.
+Gotchas: recreating `open-webui` must recreate `edge-guard` too, since it
+lives in that container's namespace (`make up` does both). The image's
+healthcheck follows `PORT`, so it probes `8081` inside the container.
 
 Open WebUI has no base-path / sub-path support (confirmed empirically —
 its built-in frontend serves root-absolute asset paths, e.g. `/_app/...`,
