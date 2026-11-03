@@ -68,7 +68,9 @@ The bundled auth is bypassed via that header, not disabled. Because the
 container also sits on `inference-net`, a small nginx sidecar (`edge-guard`)
 is the only listener in front of it. It forwards the identity headers only
 when the request carries the gateway's secret (`OPEN_WEBUI_EDGE_SECRET`, the
-same value as in edge-plane's `.env`). Having no base-path support upstream,
+same value as in edge-plane's `.env`), and it refuses file uploads, knowledge
+bases and retrieval processing for every account, so documents are not stored
+here (memories are off too). Having no base-path support upstream,
 Open WebUI gets its own gateway port rather than a sub-path:
 `https://<EDGE_HOST>:8443/`.
 
@@ -128,8 +130,9 @@ authoritative over the UI** — `ENABLE_PERSISTENT_CONFIG=false` means admin-UI
 
 ## Persistence
 
-All application state — the SQLite DB (users, chats, settings), uploaded
-files, RAG vectors — lives in the external Docker volume `open-webui-data`,
+All application state — the SQLite DB (users, chats, settings), files and
+RAG vectors from before intake was switched off, and speech-to-text recordings —
+lives in the external Docker volume `open-webui-data`,
 mounted at `/app/backend/data`. Being `external`, it is owned by the host
 rather than the compose project, so no teardown can delete it: not `make
 down`, not `make restart`, not a raw `docker compose down -v`. Only `make

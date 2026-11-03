@@ -164,6 +164,19 @@ services:
       ENABLE_ADMIN_EXPORT: false
       BYPASS_ADMIN_ACCESS_CONTROL: false
       ENABLE_COMMUNITY_SHARING: false
+      # No intake into Open WebUI's own stores: chat file and web uploads,
+      # knowledge bases and memories are off, so documents and personal
+      # facts do not pile up here, outside the apps that audit what they
+      # store. These flags hide the controls (knowledge access is already
+      # the upstream default, pinned like the telemetry opt-outs below).
+      # The enforcement is edge-guard's: upstream checks the upload
+      # permission only in its UI and lets admins past the knowledge one,
+      # so the guard refuses those endpoints for everyone.
+      USER_PERMISSIONS_CHAT_FILE_UPLOAD: false
+      USER_PERMISSIONS_CHAT_WEB_UPLOAD: false
+      USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS: false
+      USER_PERMISSIONS_FEATURES_MEMORIES: false
+      ENABLE_MEMORIES: false
       # The image already sets these; pinned here so an upstream default
       # change cannot switch telemetry back on.
       SCARF_NO_ANALYTICS: true
