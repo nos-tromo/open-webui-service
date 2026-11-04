@@ -138,7 +138,11 @@ no network and `open-webui-data` at `/data`.
   `system`: `target` by reference (file names, with the cache directory as
   `container`; chat ids) and `count`; `criteria` with the rule
   (`max_age_minutes` or `period_days`, and the `cutoff`) and, for chats, the
-  owner's account id and e-mail and how many rows of each kind went with them.
+  `owner` and how many rows of each kind went with them. The owner is Open
+  WebUI's opaque account id, never an e-mail or name: while the account
+  exists it resolves in Open WebUI's `user` table (an admin's
+  `GET /api/v1/users/<id>`), and Open WebUI's own per-request audit records
+  carry the same id with the account, for as long as its log is kept.
   More than 200 ids continue in `retention.sweep.ids` events. Never a title,
   message, tag name or file content. At start, `admin` / `config.audit` states
   the periods; `admin` / `retention.refused` (once) and `retention.resumed`

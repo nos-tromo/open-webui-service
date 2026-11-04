@@ -83,7 +83,6 @@ REQUIRED_COLUMNS: Final[Mapping[str, frozenset[str]]] = {
     "chatidtag": frozenset({"chat_id"}),
     "automation_run": frozenset({"chat_id"}),
     "tag": frozenset({"id", "user_id"}),
-    "user": frozenset({"id", "email"}),
 }
 #: Every table with a ``chat_id`` column or a foreign key to ``chat``; all of
 #: them are cleaned up below. Any other is a schema this module does not know.
@@ -725,11 +724,9 @@ class ChatSweeper:
                 removed_tags += conn.execute(
                     f"DELETE FROM tag WHERE user_id IS ? AND id IN ({_placeholders(len(chunk))})", (owner, *chunk)
                 ).rowcount
-            row = conn.execute('SELECT email FROM "user" WHERE id IS ?', (owner,)).fetchone()
-            criteria: dict[str, object] = {**rule, "owner": owner}
-            if row is not None and row[0]:
-                criteria["owner_email"] = str(row[0])
-            criteria["internal_chats"] = len(ids) - len(still)
+            # The owner by Open WebUI's opaque account id only: the record needs
+            # the reference, not the person's address.
+            criteria: dict[str, object] = {**rule, "owner": owner, "internal_chats": len(ids) - len(still)}
             criteria.update(counts)
             criteria["tags"] = removed_tags
             record = emit_deletion(self._emitter, "chat", ids, criteria)

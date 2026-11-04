@@ -199,7 +199,6 @@ class SweepTest(Workspace):
                 "period_days": 30,
                 "cutoff": "2026-08-21T12:00:00Z",
                 "owner": ALICE,
-                "owner_email": "alice@example.org",
                 "internal_chats": 0,
                 "messages": 3,
                 "shares": 1,
@@ -216,6 +215,7 @@ class SweepTest(Workspace):
         )
         self.assertNotIn(SENTINEL, stream.getvalue())
         self.assertNotIn("only_here", stream.getvalue(), "tag names describe content and are never recorded")
+        self.assertNotIn("alice@example.org", stream.getvalue(), "the owner is named by account id only")
 
     def test_age_is_the_last_change(self) -> None:
         """updated_at decides; created_at stands in when it is missing; neither means kept."""
@@ -230,7 +230,7 @@ class SweepTest(Workspace):
         self.assertNotIn(expired, self.store.chat_ids())
 
     def test_one_record_per_owner(self) -> None:
-        """Each record names the account whose chats went; one without an e-mail has none."""
+        """Each record names the owner by Open WebUI's account id only, never by address or name."""
         alice = self.store.chat(ALICE, age_days=60)
         bob = self.store.chat(BOB, age_days=60)
         nobody = self.store.chat(None, age_days=60)
@@ -241,8 +241,10 @@ class SweepTest(Workspace):
         self.assertEqual(by_owner[ALICE]["target"]["ids"], [alice])
         self.assertEqual(by_owner[BOB]["target"]["ids"], [bob])
         self.assertEqual(by_owner[None]["target"]["ids"], [nobody])
-        self.assertEqual(by_owner[ALICE]["criteria"]["owner_email"], "alice@example.org")
-        self.assertNotIn("owner_email", by_owner[BOB]["criteria"])
+        for event in deletions(stream):
+            self.assertNotIn("owner_email", event["criteria"])
+        for detail in ("alice@example.org", "Alice Example", "Bob Example"):
+            self.assertNotIn(detail, stream.getvalue())
 
     def test_internal_chats_go_with_their_parent(self) -> None:
         """Sub-agent chats, at any depth and however recent, follow the expired chat they came from."""
