@@ -2,9 +2,10 @@
 set -euo pipefail
 # shellcheck disable=SC1091,SC2154  # sources vendored scripts/bundle-lib.sh (sets BUNDLE_*)
 #
-# Save the pinned upstream image as a versioned airgap tarball. open-webui-service
-# builds nothing and pulls a single registry image, so this mirrors data-plane's
-# pull-only bundler: pull, then `bundle_collect_pulled` re-tags every
+# Save the pinned images (Open WebUI, edge-guard's nginx, the retention sidecar's
+# python) as one versioned airgap tarball. open-webui-service builds nothing and
+# only pulls registry images, so this mirrors data-plane's pull-only bundler:
+# pull, then `bundle_collect_pulled` re-tags every
 # name:tag@digest ref to name:tag (via bundle_retag) BEFORE `docker save`, so the
 # digest-pinned `image:` in docker/compose.yaml resolves after `docker load` on
 # the offline host. Without the re-tag, `docker save name:tag@digest` loads back
