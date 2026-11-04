@@ -27,6 +27,23 @@ map $http_upgrade $connection_upgrade {
     ""      close;
 }
 
+# Intake into Open WebUI's own stores is refused for everyone, admins
+# included: file uploads and file content rewrites, knowledge bases and
+# retrieval processing. Upstream enforces the upload permission only in its
+# UI and lets admins past the knowledge permission, so compose's permission
+# flags alone would not stop it. Reading and deleting what already exists
+# still works, as do removing a file from a knowledge base and resetting one.
+# $uri is the decoded, normalized path, so encoded or doubled slashes and dot
+# segments cannot slip past; matching ignores case. The first matching
+# expression wins, hence the exceptions first.
+map "$request_method $uri" $owui_intake {
+    default                                                      0;
+    "~*^(POST|PUT|PATCH) /api/v1/knowledge/[^/]+/(file/remove|reset)$" 0;
+    "~*^(POST|PUT|PATCH) /api/v1/files(/|$)"                     1;
+    "~*^(POST|PUT|PATCH) /api/v1/knowledge(/|$)"                 1;
+    "~*^(POST|PUT|PATCH) /api/v1/retrieval/process(/|$)"         1;
+}
+
 server {
     listen 8080;
     server_tokens off;
@@ -40,6 +57,17 @@ server {
     set $edge_verified 0;
     if ($http_x_edge_secret = "${OPEN_WEBUI_EDGE_SECRET}") {
         set $edge_verified 1;
+    }
+
+    # Refused intake (the map above) answers 403 with a JSON detail, the
+    # shape of upstream's own errors. 418 is only the internal hand-off.
+    error_page 418 = @intake_refused;
+    if ($owui_intake) {
+        return 418;
+    }
+    location @intake_refused {
+        default_type application/json;
+        return 403 '{"detail":"Uploads, knowledge bases and retrieval processing are disabled in this deployment."}';
     }
 
     location / {
