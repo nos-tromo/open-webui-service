@@ -157,6 +157,19 @@ services:
       ENABLE_AUDIT_LOGS_FILE: false
       AUDIT_EXCLUDED_PATHS: ""
       ENABLE_AUDIT_GET_REQUESTS: true
+      # Signed user attribution at the router (vllm-service docs/audit.md).
+      # With a secret, every call Open WebUI makes to the inference endpoint
+      # carries one HS256 token (X-OpenWebUI-User-Jwt) naming the user; the
+      # router checks it with the same secret (AUDIT_OPENWEBUI_JWT_SECRET
+      # there) and records that user as the call's actor. Forwarding is on
+      # only together with the secret: without one, Open WebUI would send
+      # the user's name, id, e-mail and role as plain headers, which any
+      # caller on inference-net could forge.
+      ENABLE_FORWARD_USER_INFO_HEADERS: ${OPEN_WEBUI_FORWARD_JWT_SECRET:+true}
+      FORWARD_USER_INFO_HEADER_JWT_SECRET: ${OPEN_WEBUI_FORWARD_JWT_SECRET:-}
+      # A token is minted per call and checked as the call arrives, so a
+      # short lifetime only narrows the replay window (upstream default 300).
+      FORWARD_USER_INFO_HEADER_JWT_EXPIRES_SECONDS: "60"
       # Admins do not read or export other users' chats, see other users'
       # workspace content (knowledge, prompts, tools) by default, or share
       # anything to the public community site.

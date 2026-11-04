@@ -115,6 +115,7 @@ mandatory before any target.
 | `EDGE_NET`             | Name of the shared gateway network the SPA is reached over. | `edge-net` |
 | `EDGE_HOST`            | Gateway hostname; builds the post-sign-out redirect (`WEBUI_AUTH_SIGNOUT_REDIRECT_URL`). | `localhost` |
 | `OPEN_WEBUI_HOST_PORT` | Host port for `make up-dev`. | `3000` |
+| `OPEN_WEBUI_FORWARD_JWT_SECRET` | Signs the per-call user token the router records; same value as vllm-service's `AUDIT_OPENWEBUI_JWT_SECRET`. Empty ⇒ no user information is forwarded. | empty |
 
 Model ids must name models the endpoint actually serves, and the same model
 carries different ids per provider — `bge-m3:latest` on Ollama,
@@ -165,7 +166,9 @@ runtime.
 
 Every authenticated API request writes one audit record (account, verb, URI,
 source IP, model id; never a request or response body) to the container log.
-Admins cannot read or export other users' chats. Details:
+Admins cannot read or export other users' chats. With
+`OPEN_WEBUI_FORWARD_JWT_SECRET` set, the router's record of each model call
+names the user too, from a signed token. Details:
 [`CLAUDE.md`](./CLAUDE.md) § Architecture.
 
 ## Layout
