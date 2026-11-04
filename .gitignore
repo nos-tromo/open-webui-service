@@ -7,3 +7,6 @@
 
 # Airgap bundle artifacts (produced by scripts/bundle_images.sh)
 .open-webui-version
+
+# Python bytecode (retention/ runs as mounted source)
+__pycache__/
