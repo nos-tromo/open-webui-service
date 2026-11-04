@@ -1,9 +1,10 @@
 # open-webui-service
 
 A thin **deployment wrapper** for [Open WebUI](https://github.com/open-webui/open-webui).
-No application source lives here — the repo is Docker Compose config that runs a
+No Open WebUI source lives here — the repo is Docker Compose config that runs a
 **pinned** upstream image (`ghcr.io/open-webui/open-webui`, fixed by tag **and**
-`sha256` digest) as the chat UI for the `nos-tromo` inference stack.
+`sha256` digest) as the chat UI for the `nos-tromo` inference stack, plus a
+small stdlib sidecar (`retention/`) that deletes what Open WebUI keeps forever.
 
 Open WebUI speaks the OpenAI API. Here it is pointed at an OpenAI-compatible
 endpoint on the shared `inference-net` Docker network — in production the
@@ -45,7 +46,7 @@ cp .env.example .env        # REQUIRED — compose runs with --env-file .env
 
 make network                # create inference-net + edge-net (idempotent; up/up-dev also do this)
 make volumes                # create open-webui-data   (idempotent; up/up-dev also do this)
-make pull                   # pull the pinned upstream image
+make pull                   # pull the pinned images
 make up-dev                 # start, publishing the UI on the host
 ```
 
@@ -87,14 +88,15 @@ wraps `docker compose --env-file .env -f docker/compose.yaml …` so the root
 |---------------|------|
 | `make network`| Create the external `inference-net` and `edge-net` if missing (idempotent). |
 | `make volumes` | Create the external `open-webui-data` volume if missing (idempotent). |
-| `make pull`   | Pull the pinned upstream image. |
+| `make pull`   | Pull the pinned images. |
 | `make up`     | Start detached, production shape — **no host ports**. |
 | `make up-dev` | Like `up`, but publishes the UI on `${OPEN_WEBUI_HOST_PORT:-3000}`. |
 | `make down`   | Stop + remove the container (the `open-webui-data` volume is kept). |
 | `make restart`| `down` + `up` (⚠ see gotcha — drops the host port). |
 | `make logs`   | Tail the container logs. |
-| `make ps` / `make health` | Container status. |
-| `make bundle` | Save the pinned image of the latest release tag as an airgap `*.tar.gz` (leaves HEAD on that tag). |
+| `make ps` / `make health` | Container status; `health` also asks the retention sidecar whether it is sweeping as configured. |
+| `make retention-dry-run` | What retention would delete now, as counts and ages; changes and records nothing. `CHAT_DAYS=n` / `AUDIO_MINUTES=n` preview a period. |
+| `make bundle` | Save the pinned images of the latest release tag as an airgap `*.tar.gz` (leaves HEAD on that tag). |
 | `make bundle-dev` | Same, from the current working tree. |
 | `make nuke`   | **Destroy** the `open-webui-data` volume — all state (interactive confirm). |
 
@@ -116,6 +118,9 @@ mandatory before any target.
 | `EDGE_HOST`            | Gateway hostname; builds the post-sign-out redirect (`WEBUI_AUTH_SIGNOUT_REDIRECT_URL`). | `localhost` |
 | `OPEN_WEBUI_HOST_PORT` | Host port for `make up-dev`. | `3000` |
 | `OPEN_WEBUI_FORWARD_JWT_SECRET` | Signs the per-call user token the router records; same value as vllm-service's `AUDIT_OPENWEBUI_JWT_SECRET`. Empty ⇒ no user information is forwarded. | empty |
+| `OPEN_WEBUI_AUDIO_RETENTION_MINUTES` | Minutes after which speech-to-text recordings, their transcripts and text-to-speech output are deleted; `off` keeps them. | `60` |
+| `OPEN_WEBUI_CHAT_RETENTION_DAYS` | Days without a change after which a chat is deleted, with everything that belongs only to it. Empty or `off` ⇒ no chat is deleted. | empty (off) |
+| `OPEN_WEBUI_RETENTION_INTERVAL_S` | Seconds between two sweeps of the audio caches (chats: at start, then hourly). | `300` |
 
 Model ids must name models the endpoint actually serves, and the same model
 carries different ids per provider — `bge-m3:latest` on Ollama,
@@ -132,13 +137,33 @@ authoritative over the UI** — `ENABLE_PERSISTENT_CONFIG=false` means admin-UI
 ## Persistence
 
 All application state — the SQLite DB (users, chats, settings), files and
-RAG vectors from before intake was switched off, and speech-to-text recordings —
-lives in the external Docker volume `open-webui-data`,
+RAG vectors from before intake was switched off, and speech-to-text recordings
+(deleted after an hour by default, see [Retention](#retention)) — lives in the
+external Docker volume `open-webui-data`,
 mounted at `/app/backend/data`. Being `external`, it is owned by the host
 rather than the compose project, so no teardown can delete it: not `make
 down`, not `make restart`, not a raw `docker compose down -v`. Only `make
 nuke` removes it, behind an interactive confirm, and that wipes every account,
 chat and document.
+
+## Retention
+
+Open WebUI never deletes the recordings it transcribes, their transcripts or
+its text-to-speech output, and it has no retention setting for chats. The
+`retention` service deletes them, and records every deletion in the
+federation's data-protection audit log:
+
+- speech-to-text recordings with their transcripts, and text-to-speech output,
+  60 minutes after they were written (`OPEN_WEBUI_AUDIO_RETENTION_MINUTES`;
+  `off` keeps them);
+- chats, with everything that belongs only to them, once they have not changed
+  for `OPEN_WEBUI_CHAT_RETENTION_DAYS` days. Off until you set it.
+
+Before you turn chat retention on, see what it would delete:
+`make retention-dry-run CHAT_DAYS=90` prints counts and ages, never names or
+content, and deletes and records nothing. What belongs to a chat, how a
+deletion is recorded, and why a new Open WebUI image stops chat retention
+until it is verified: [`CLAUDE.md`](./CLAUDE.md) § Retention.
 
 ## Updating the image
 
@@ -151,10 +176,14 @@ by hand, bump both lines together, then:
 make pull && make up        # or up-dev
 ```
 
+An image whose database schema differs from the verified one fails CI's
+`retention-schema` job until chat retention has been checked against it
+([`CLAUDE.md`](./CLAUDE.md) § Retention).
+
 ## Airgap delivery
 
 `make bundle` checks out the latest annotated release tag, runs `pull`, and
-writes the pinned image to a versioned `open-webui-pulled-vX.Y.Z.tar.gz`,
+writes the pinned images to a versioned `open-webui-pulled-vX.Y.Z.tar.gz`,
 matching the stack's pulled-image convention. On success HEAD stays on that
 tag, so the repo files match the bundle; `git switch main` returns. It refuses
 on uncommitted changes to tracked files or when no tag is reachable;
@@ -168,8 +197,10 @@ Every authenticated API request writes one audit record (account, verb, URI,
 source IP, model id; never a request or response body) to the container log.
 Admins cannot read or export other users' chats. With
 `OPEN_WEBUI_FORWARD_JWT_SECRET` set, the router's record of each model call
-names the user too, from a signed token. Details:
-[`CLAUDE.md`](./CLAUDE.md) § Architecture.
+names the user too, from a signed token. Every deletion the retention
+sidecar makes is an event of the federation's data-protection audit log in
+that container's log. Details: [`CLAUDE.md`](./CLAUDE.md) § Architecture and
+§ Retention.
 
 ## Layout
 
@@ -180,6 +211,12 @@ names the user too, from a signed token. Details:
 │   └── compose.override.yaml   # dev overlay: publishes the UI port
 ├── nginx/
 │   └── edge-guard.conf.template  # sidecar: identity headers only with the gateway's secret
+├── retention/                  # sidecar: deletes and records what Open WebUI keeps forever
+│   ├── owui_retention.py       #   entry point: serve, dry-run, schema, health, verify
+│   ├── audio_caches.py         #   speech-to-text and text-to-speech files
+│   ├── chat_retention.py       #   chats in webui.db, schema guard
+│   ├── audit_event.py, audit_runtime.py  # vendored from nos-tromo/.github, drift-checked
+│   └── tests/                  #   stdlib unittest; fixtures/webui-schema.sql is the pinned schema
 ├── Makefile                    # operator interface (see `make help`)
 ├── .env.example                # copy to .env
 ├── CLAUDE.md                   # architecture, internals, gotchas

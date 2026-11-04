@@ -24,7 +24,7 @@ For any non-trivial change (>1 file or any root-cause fix), present a plan and w
 
 ## What this repo is
 
-A thin **deployment wrapper** for [Open WebUI](https://github.com/open-webui/open-webui) — no application source lives here. The repo is Docker Compose config (`docker/`) plus a small vendored airgap bundler (`scripts/`), running a pinned upstream image (`ghcr.io/open-webui/open-webui`, pinned by tag **and** sha256 digest). Changes here are config/ops changes, not code changes.
+A thin **deployment wrapper** for [Open WebUI](https://github.com/open-webui/open-webui) — no Open WebUI source lives here. The repo is Docker Compose config (`docker/`) plus a small vendored airgap bundler (`scripts/`), running a pinned upstream image (`ghcr.io/open-webui/open-webui`, pinned by tag **and** sha256 digest), and the stdlib `retention/` sidecar that deletes what that image keeps forever (§ Retention). Apart from `retention/`, changes here are config/ops changes, not code changes.
 
 ## Architecture: where this fits
 
@@ -46,7 +46,7 @@ To run Open WebUI usefully, `inference-net` must exist and an upstream OpenAI-co
 
 **No content intake.** Open WebUI is a chat UI here, not a document store: documents and personal facts belong in the apps that audit what they store. Chat file and web uploads, knowledge bases and memories are therefore off. `compose.yaml` sets `USER_PERMISSIONS_CHAT_FILE_UPLOAD=false`, `USER_PERMISSIONS_CHAT_WEB_UPLOAD=false`, `USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS=false` (already the upstream default, pinned), `USER_PERMISSIONS_FEATURES_MEMORIES=false` and `ENABLE_MEMORIES=false`; with `ENABLE_PERSISTENT_CONFIG=false` these load from env on every boot. The flags only hide the controls, with one exception: `ENABLE_MEMORIES=false` the server enforces itself. In the pinned image the files router never checks the upload permission (only the UI does), and admins pass the knowledge permission. So `edge-guard` does the enforcing: it answers `403` (JSON `detail`) to `POST`/`PUT`/`PATCH` under `/api/v1/files`, `/api/v1/knowledge` and `/api/v1/retrieval/process`, for every account. It matches on nginx's decoded, normalized path, ignoring case. Reading and deleting existing files and knowledge bases still works, as do `…/file/remove` and `…/reset`, so anything stored before can be cleaned up. Attaching a file or pasting an image into a chat fails with that `403`. Verified against the pinned image's `routers/files.py`, `knowledge.py`, `retrieval.py`, `memories.py` and `models/config.py`; re-check the route list on an image bump.
 
-Persistence: **external** volume `open-webui-data` → `/app/backend/data` (SQLite DB, users, chats, uploads, RAG vectors). Declared `external: true` in `compose.yaml`, it is created out-of-band by `make volumes` (like the network) and survives every app teardown — even `docker compose down -v`; only `make nuke` removes it (container `down`, then `docker volume rm`). Destroying it wipes all app state.
+Persistence: **external** volume `open-webui-data` → `/app/backend/data` (SQLite DB, users, chats, uploads, RAG vectors). Declared `external: true` in `compose.yaml`, it is created out-of-band by `make volumes` (like the network) and survives every app teardown — even `docker compose down -v`; only `make nuke` removes it (container `down`, then `docker volume rm`). Destroying it wipes all app state. The `retention` sidecar mounts it too, to delete what upstream keeps forever (§ Retention).
 
 ## Access — edge gateway SSO
 
@@ -91,11 +91,106 @@ gateway instead gives it a **dedicated port**, `:8443` (see `edge-plane`'s
 `caddy/Caddyfile`); the shared site's `/webui` route just redirects there.
 Reachable at `https://<EDGE_HOST>:8443/` once both stacks are up.
 
+## Retention
+
+Open WebUI deletes neither the files its audio endpoints leave on
+`open-webui-data` nor, having no retention setting, any chat. The `retention`
+service does, and records every deletion as a `delete` event of the
+federation's data-protection audit log: hash-chained lines
+(`service: open-webui-service`) in that container's log, which obs-plane
+collects. Code: `retention/`, stdlib Python mounted read-only into the pinned
+`python` image; nothing is installed. It runs as uid 10001, Open WebUI's and
+the owner of everything on the volume, with a read-only root, no capabilities,
+no network and `open-webui-data` at `/data`.
+
+- **Audio caches, on by default.** Every regular file in
+  `cache/audio/transcriptions/` (each recording sent to speech-to-text, the
+  copies upstream converts, compresses and chunks it into, and the transcript
+  `.json` beside them) and in `cache/audio/speech/` (text-to-speech output, with
+  the request beside it, which holds the text spoken) is deleted once it is
+  older than `OPEN_WEBUI_AUDIO_RETENTION_MINUTES` (compose default 60; `off`
+  keeps them, as upstream does), checked every
+  `OPEN_WEBUI_RETENTION_INTERVAL_S` (300). Directories and symlinks are left
+  alone, and a cache directory that is a symlink or resolves off the volume is
+  refused. Files have no transactions: each batch of at most 200 is recorded
+  first and deleted after, and a file that could not be deleted is recorded
+  again with `outcome: error`. Verified against the pinned image's
+  `routers/audio/__init__.py` and `routers/openai.py` (which caches speech into
+  the same directory).
+- **Chats, off by default.** With `OPEN_WEBUI_CHAT_RETENTION_DAYS` set, every
+  chat not changed for that many days (its `updated_at`, or `created_at` where
+  that is missing) is deleted at start and then hourly, in Open WebUI's SQLite
+  database (`webui.db`) while Open WebUI keeps running. With it go its messages
+  (`chat_message`), shared snapshots (`shared_chat`) and their access grants,
+  file links (`chat_file`), comments and their reactions, the notifications
+  about it, the ratings of its messages (`feedback`, each holding a full copy of
+  the chat in `snapshot`), legacy tag links (`chatidtag`), the internal
+  (sub-agent) chats spawned from it at any depth, and the owner's tags that no
+  remaining visible chat of theirs carries (internal chats do not count, as in
+  upstream's own check). Automation runs keep their record and lose the
+  link; uploaded files and folders belong to their owner and stay. Pinned and
+  archived chats are not exempt. An internal chat whose parent still exists
+  lives as long as the parent; one whose parent is gone expires on its own age.
+  Upstream's own delete (`models/chats.py`, `routers/chats.py`) leaves the share
+  grants, the ratings and the file links behind; the declared cascades never
+  fire, as Open WebUI does not enable SQLite's foreign keys.
+- **Records.** One `delete` / `retention.sweep` event per batch, actor
+  `system`: `target` by reference (file names, with the cache directory as
+  `container`; chat ids) and `count`; `criteria` with the rule
+  (`max_age_minutes` or `period_days`, and the `cutoff`) and, for chats, the
+  owner's account id and e-mail and how many rows of each kind went with them.
+  More than 200 ids continue in `retention.sweep.ids` events. Never a title,
+  message, tag name or file content. At start, `admin` / `config.audit` states
+  the periods; `admin` / `retention.refused` (once) and `retention.resumed`
+  mark a store that is not being swept.
+- **No deletion without its record.** A chat batch's record is written inside
+  the transaction that deletes it, before the commit; if the record fails the
+  batch rolls back, and a batch whose commit fails is recorded again with
+  `outcome: error`. A record that cannot be written stops the service (exit
+  1): nothing more is deleted until the restarted container can record
+  (`restart: unless-stopped`). That shows in `make health` and in the ops log
+  (stderr), which holds counts only.
+- **Locking.** In WAL mode the sweeper's reads take no lock. Deletes run in
+  `BEGIN IMMEDIATE` transactions of at most 50 chats and 200 ids (a chat with
+  more internal chats than that goes alone), each waiting up to 30 s for the
+  write lock, with a pause between batches so Open WebUI's
+  own writes (busy timeout 5 s) get through. `secure_delete` overwrites the
+  deleted rows in the database file instead of leaving them in free pages.
+- **Schema guard.** Chat retention runs only on the schema it was verified
+  against: migration revision `e42c8f710a36` (Open WebUI v0.13.0;
+  `VERIFIED_REVISIONS` in `retention/chat_retention.py`), every column its
+  statements use, and no table besides the ones it cleans that has a `chat_id`
+  column or a foreign key to `chat`. It is checked before the sweep and again
+  inside every transaction. A mismatch refuses chat retention while the audio
+  caches are still swept: `retention.refused` is recorded, the ops log names
+  the table or column, and the healthcheck turns unhealthy. With
+  `DATABASE_URL` in `.env`, Open WebUI keeps its chats elsewhere and chat
+  retention refuses too; compose passes only whether the variable is set.
+- **Dry run.** `make retention-dry-run` (the service must be up; it runs in it
+  with `docker compose exec`) prints what the configured periods would delete
+  now: counts and age ranges, never names, ids or content. It reads what it
+  counts, through a read-only connection, and records and deletes nothing.
+  `CHAT_DAYS=n` / `AUDIO_MINUTES=n` preview a period before it is configured.
+- **Image bumps.** CI's `retention-schema` job migrates a database with the
+  pinned image and fails when its schema differs from
+  `retention/tests/fixtures/webui-schema.sql`, which the tests build their
+  databases from, or the guard refuses it. Then re-read upstream's delete paths
+  for anything new that belongs to a chat, regenerate the fixture with
+  `retention/tests/schema_dump.py` from such a database, extend the cleanup if
+  needed, and add the revision to `VERIFIED_REVISIONS`. Deployed before that, a
+  bump only stops chat retention, visibly; it never deletes by an outdated
+  picture of the schema.
+- **Audit store.** obs-plane's verifier accepts chains only from the emitters
+  it lists; this one is `open-webui-service` / `retention`.
+- **Tests:** `python3 -m unittest discover -s retention/tests -t retention`
+  (stdlib only, synthetic data); CI runs them on the runner and in the pinned
+  image, read-only as uid 10001.
+
 ## Compose layout
 
 Operate via `make` from the repo root — the `Makefile` wraps `docker compose --env-file .env -f docker/compose.yaml` and mirrors the sibling infra services' schema. Two compose files:
 
-- `compose.yaml` — base service: image, environment, the external `open-webui-data` volume, `inference-net` network, and `local` log driver with rotation (50m × 5 files). This is the production shape — **no host ports**. Its `environment:` block hard-disables the image's bundled providers (see Architecture) and sets `ENABLE_PERSISTENT_CONFIG=false` so `.env` — not the SQLite-persisted admin config — is the source of truth.
+- `compose.yaml` — the services (`volume-permissions`, `open-webui`, `edge-guard`, `retention`): images, environment, the external `open-webui-data` volume, the `inference-net` and `edge-net` networks, and the `local` log driver with rotation (50m × 5 files). This is the production shape — **no host ports**. Its `environment:` block hard-disables the image's bundled providers (see Architecture) and sets `ENABLE_PERSISTENT_CONFIG=false` so `.env` — not the SQLite-persisted admin config — is the source of truth.
 - `compose.override.yaml` — publishes the UI port (`${OPEN_WEBUI_HOST_PORT:-3000}` → container `8080`). Layered in only by `make up-dev` (not `make up`), matching how the rest of the stack separates production from dev.
 
 ## Common commands
@@ -107,15 +202,16 @@ cp .env.example .env     # first-time setup — REQUIRED (--env-file .env must e
 
 make network             # create the external inference-net if missing (idempotent)
 make volumes             # create the external open-webui-data volume if missing (idempotent)
-make pull                # pull the pinned upstream image
+make pull                # pull the pinned images
 make up                  # start, detached, production shape (no host ports)
 make up-dev              # like 'up', but publishes the UI on ${OPEN_WEBUI_HOST_PORT:-3000}
 make logs                # tail logs
-make ps                  # container status   (also: make health)
+make ps                  # container status   (also: make health, which asks the retention sidecar too)
+make retention-dry-run   # what retention would delete now: counts and ages, changes nothing (CHAT_DAYS=n previews)
 make down                # stop + remove container (data volume preserved)
 make restart             # down + up
 make nuke                # DESTROY open-webui-data — all state (interactive confirm)
-make bundle              # save the latest release tag's pinned image as an airgap *.tar.gz (HEAD stays on the tag)
+make bundle              # save the latest release tag's pinned images as an airgap *.tar.gz (HEAD stays on the tag)
 make bundle-dev          # same, from the current working tree
 ```
 
@@ -125,14 +221,14 @@ make bundle-dev          # same, from the current working tree
 
 A single `.env` at the **repo root** (copy from `.env.example`) drives everything. It is consumed two ways — don't conflate them:
 
-1. **Compose variable substitution** (`${VAR:-default}` in the YAML): `OPENAI_API_BASE_URL`, `OPENAI_API_KEY`, `TEXT_MODEL` (→ `DEFAULT_MODELS`, the chat model auto-selected for new chats), `RAG_EMBEDDING_MODEL`, `INFERENCE_NET`, `OPEN_WEBUI_HOST_PORT`. The Makefile passes these via `--env-file .env`. `TEXT_MODEL` and `RAG_EMBEDDING_MODEL` follow the stack-wide model-naming convention and must name models the endpoint actually serves.
+1. **Compose variable substitution** (`${VAR:-default}` in the YAML): `OPENAI_API_BASE_URL`, `OPENAI_API_KEY`, `TEXT_MODEL` (→ `DEFAULT_MODELS`, the chat model auto-selected for new chats), `RAG_EMBEDDING_MODEL`, `INFERENCE_NET`, `OPEN_WEBUI_HOST_PORT`, and the retention periods `OPEN_WEBUI_AUDIO_RETENTION_MINUTES`, `OPEN_WEBUI_CHAT_RETENTION_DAYS`, `OPEN_WEBUI_RETENTION_INTERVAL_S` (§ Retention). The Makefile passes these via `--env-file .env`. `TEXT_MODEL` and `RAG_EMBEDDING_MODEL` follow the stack-wide model-naming convention and must name models the endpoint actually serves.
 2. **`env_file: ../.env`** (optional, `required: false`): injects the same root `.env` as environment variables *inside the container*.
 
 `--env-file .env` hard-fails if the file is missing, so `cp .env.example .env` is mandatory before any make/compose target. Per the sibling services, `.env` and `*.tar.gz` bundles are git-ignored (see `.gitignore`).
 
 **Provider switch.** The stack-wide model ids and endpoints are exported in your shell (`~/.bashrc` / `~/.zshrc`) — `TEXT_MODEL`, `EMBED_MODEL`, `WHISPER_MODEL`, `OPENAI_API_BASE_URL`, and the chat/STT endpoints — shared with every sibling consumer. Compose interpolation takes those shell exports over `.env`, so the whole stack stays pinned to one provider at a time (Ollama serves the embed model as `bge-m3:latest`, vllm-service as `BAAI/bge-m3`, etc.). To switch backends, change the exports (and any provider-specific entries in `.env`), then `make up-dev` / `make up`.
 
-**Updating the image:** Dependabot (`docker-compose` ecosystem) opens a PR bumping the tag and `@sha256:` digest on both `image:` lines in `compose.yaml` (`volume-permissions` and `open-webui` run the same image; the ref is repeated literally because Dependabot cannot rewrite a value behind a YAML anchor, so keep the two identical). By hand: bump both lines, then `make pull && make up` (or `up-dev`).
+**Updating the image:** Dependabot (`docker-compose` ecosystem) opens a PR bumping the tag and `@sha256:` digest on both `image:` lines in `compose.yaml` (`volume-permissions` and `open-webui` run the same image; the ref is repeated literally because Dependabot cannot rewrite a value behind a YAML anchor, so keep the two identical). By hand: bump both lines, then `make pull && make up` (or `up-dev`). A new image whose database schema differs fails CI's `retention-schema` job until chat retention is re-verified against it (§ Retention).
 
 ## Gotchas (verified)
 
@@ -148,7 +244,7 @@ A single `.env` at the **repo root** (copy from `.env.example`) drives everythin
   into its read-only static dir — stock assets serve fine from the image.
 - **`.env` is authoritative, the UI is not.** `compose.yaml` sets `ENABLE_PERSISTENT_CONFIG=false`, so connection/model settings load from env every boot and admin-UI "Connections" edits **do not persist** across a restart. Change the endpoint or models by editing `.env`, then restart — not in the UI. (Open WebUI's default is the opposite: UI edits get written to the SQLite config table and *shadow* env; this deployment turns that off on purpose, so the upstream image's `OPENAI_API_BASE_URL=http://litellm:4000/v1` default is overridden cleanly to `vllm-router` here.)
 - **Shell env beats `.env` for `${...}` interpolation.** The stack exports model-selection vars (`TEXT_MODEL`, `EMBED_MODEL`, …) in your shell (`~/.zshrc`), and docker-compose prefers the shell over `--env-file .env` when interpolating. So `DEFAULT_MODELS` follows the *exported* `TEXT_MODEL` (e.g. `gemma4:31b-cloud`), and any `TEXT_MODEL` set in this repo's `.env` is ignored while the shell var is set. Change the default by changing the stack-wide export (shared with the other consumers), not just `.env`.
-- **Speech-to-text keeps recordings.** Each transcription request stores the uploaded audio and its transcript under `cache/audio/transcriptions/` on `open-webui-data` and nothing deletes them (pinned image, `routers/audio/__init__.py`). No retention rule covers them yet.
+- **Speech-to-text keeps recordings.** Each transcription request stores the uploaded audio and its transcript under `cache/audio/transcriptions/` on `open-webui-data`, and upstream never deletes them (pinned image, `routers/audio/__init__.py`); the text-to-speech cache under `cache/audio/speech/` is never pruned either. The `retention` sidecar deletes both, 60 minutes after a file was written by default (§ Retention).
 - **`make restart` drops the host port.** `restart` = `down` + `up`, and `up` is the production shape with **no published ports**. For local access use `make down && make up-dev` instead.
 - **Embedding model must exist on the endpoint.** `RAG_EMBEDDING_MODEL` follows the stack `EMBED_MODEL` (`compose.yaml`: `${EMBED_MODEL:-bge-m3:latest}`) and is requested over the endpoint's `/v1/embeddings`. The id is endpoint-specific — Ollama serves it as `bge-m3:latest`, vllm-service as `BAAI/bge-m3` — so `EMBED_MODEL` must match the active `OPENAI_API_BASE_URL`. Changing it changes vector dimensions, invalidating existing knowledge-base vectors (re-index needed).
 - **STT endpoint is separate from chat.** `AUDIO_STT_OPENAI_API_BASE_URL` does *not* inherit `OPENAI_API_BASE_URL` — Open WebUI's built-in default is the literal `api.openai.com` (config.py reassigns the singular var after seeding the real `OPENAI_API_BASE_URLS`). `compose.yaml` wires it to `${WHISPER_API_BASE:-${OPENAI_API_BASE_URL:-…}}`, so STT follows the chat endpoint by default (production `vllm-router` fronts the `asr` backend) and you redirect it with `WHISPER_API_BASE` (e.g. the CPU `asr-only` stack `http://asr-only:8000/v1` when chat is on Ollama). `AUDIO_STT_MODEL` shares the stack's `WHISPER_MODEL`, so it auto-matches what the asr endpoint serves.
