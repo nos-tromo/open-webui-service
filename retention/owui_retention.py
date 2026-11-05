@@ -60,6 +60,7 @@ from audio_caches import AUDIO_CACHES, CacheRefused, scan_cache, sweep_cache
 from audit_event import STREAM_MARKER, AuditEmitter, AuditWriteError, verify_chain
 from audit_runtime import open_audit_stream
 from chat_retention import ChatSweeper, SchemaRefused, open_database, preview, schema_problems
+from file_retention import FileSweeper, count_uploads
 from note_retention import NS, NoteSweeper, count_notes
 from retention_state import STATE_NAME, RetentionState, StateRefused, deletion_allowed
 from sweep_events import SERVICE, SYSTEM, counted, iso_utc
@@ -84,9 +85,11 @@ MAX_INTERVAL_S: Final = 86_400
 CHAT_EVERY_S: Final = 3_600
 CHATS: Final = "chats"
 NOTES: Final = "notes"
-#: The stores in Open WebUI's database, swept in this order at the chats'
-#: schedule and by the chats' period, each with its own grace.
-CONTENT_STORES: Final = (CHATS, NOTES)
+FILES: Final = "files"
+#: The stores in Open WebUI's database (and, for uploads, its uploads/), swept
+#: in this order at the chats' schedule and by the chats' period, each with its
+#: own grace.
+CONTENT_STORES: Final = (CHATS, NOTES, FILES)
 STATUS_VERSION: Final = 1
 
 _VERSION: Final = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,63}")
@@ -480,15 +483,20 @@ class Rounds:
                 self._grace_logged.add(store)
             self._ok(store, now)
             return True
-        sweeper = (ChatSweeper if store == CHATS else NoteSweeper)(
-            self._emitter, self._settings.database, days, stop=self._stop
-        )
+        database = self._settings.database
+        sweeper: ChatSweeper | NoteSweeper | FileSweeper
+        if store == CHATS:
+            sweeper = ChatSweeper(self._emitter, database, days, stop=self._stop)
+        elif store == NOTES:
+            sweeper = NoteSweeper(self._emitter, database, days, stop=self._stop)
+        else:
+            sweeper = FileSweeper(self._emitter, database, self._settings.data_dir, days, stop=self._stop)
         try:
             result = sweeper.sweep(now)
         except SchemaRefused as exc:
             self._refuse(store, "schema", "; ".join(exc.problems))
             return False
-        except sqlite3.Error as exc:
+        except (sqlite3.Error, OSError) as exc:
             self._fail(store, exc)
             return False
         self._ok(store, now)
@@ -553,6 +561,7 @@ def config_criteria(settings: Settings, since: Mapping[str, float | None] | None
         "chat_retention_days": settings.chat_days,
         "chat_retention_since": _since_text((since or {}).get(CHATS)),
         "note_retention_since": _since_text((since or {}).get(NOTES)),
+        "file_retention_since": _since_text((since or {}).get(FILES)),
         "notice_days": settings.notice_days,
         "interval_s": settings.interval_s,
         "chat_every_s": CHAT_EVERY_S,
@@ -846,6 +855,49 @@ def _dry_run_notes(settings: Settings, days: int | None, now: float, out: TextIO
     return True
 
 
+def _dry_run_uploads(settings: Settings, days: int | None, now: float, out: TextIO) -> bool:
+    """Report the uploads kept from before the intake was closed.
+
+    Args:
+        settings: The settings.
+        days: The period to evaluate; ``None`` is off.
+        now: The report's time.
+        out: Where the report goes.
+
+    Returns:
+        Whether the uploads could be evaluated.
+    """
+    print(f"\nUploads ({DATABASE_NAME} and uploads/; from before the intake was closed)", file=out)
+    if days is None:
+        print("  retention: off; nothing is deleted", file=out)
+        return True
+    if settings.external_database or not settings.database.is_file():
+        print("  would delete: nothing (no webui.db to sweep)", file=out)
+        return not settings.external_database
+    cutoff = int(now) - days * 86_400
+    try:
+        conn = open_database(settings.database, readonly=True)
+        try:
+            if schema_problems(conn):
+                print("  refused: the database is not the schema this release was verified against", file=out)
+                return False
+            due, kept = count_uploads(conn, cutoff)
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        print(f"  cannot be evaluated: {exc}", file=out)
+        return False
+    print(f"  would delete: {counted(due, 'uploads')}" if due else "  would delete: nothing", file=out)
+    print(f"  keeps: {counted(kept, 'uploads')}", file=out)
+    if due:
+        print(
+            "  what Open WebUI derived from them into its vector store stays until an admin runs"
+            " Reset vector storage (Admin settings, Documents)",
+            file=out,
+        )
+    return True
+
+
 def dry_run(
     settings: Settings,
     out: TextIO,
@@ -871,7 +923,8 @@ def dry_run(
     audio_ok = _dry_run_audio(settings, audio_minutes, moment, out)
     chats_ok = _dry_run_chats(settings, chat_days, moment, out)
     notes_ok = _dry_run_notes(settings, chat_days, moment, out)
-    return 0 if audio_ok and chats_ok and notes_ok else 1
+    uploads_ok = _dry_run_uploads(settings, chat_days, moment, out)
+    return 0 if audio_ok and chats_ok and notes_ok and uploads_ok else 1
 
 
 def schema_check(database: Path, out: TextIO) -> int:

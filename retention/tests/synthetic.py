@@ -181,6 +181,27 @@ class Store:
             (self._id("grant"), note_id, BOB, NOW),
         )
 
+    def upload(self, owner: str | None, *, created_days: float, path: str | None = None) -> str:
+        """Add an uploaded file's row the way the pinned image writes it (seconds; path under its upload dir).
+
+        Args:
+            owner: The owner's user id.
+            created_days: Days since it was uploaded.
+            path: Its recorded path; ``/app/backend/data/uploads/<id>_upload.txt`` by default.
+
+        Returns:
+            The file id.
+        """
+        file_id = self._id("file")
+        recorded = path if path is not None else f"/app/backend/data/uploads/{file_id}_upload.txt"
+        created = int(NOW - created_days * DAY)
+        self.conn.execute(
+            "INSERT INTO file (id, user_id, filename, meta, data, path, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (file_id, owner, f"{SENTINEL}.txt", "{}", json.dumps({"content": SENTINEL}), recorded, created, created),
+        )
+        return file_id
+
     def message(self, chat_id: str, owner: str) -> str:
         """Add a message to a chat.
 

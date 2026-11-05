@@ -124,7 +124,7 @@ class Volume(unittest.TestCase):
             version_file=version,
             status_file=self.tmp / "status.json",
         )
-        self.since(chats=(30, NOW - 400 * DAY), notes=(30, NOW - 400 * DAY))
+        self.since(chats=(30, NOW - 400 * DAY), notes=(30, NOW - 400 * DAY), files=(30, NOW - 400 * DAY))
 
     def since(self, **stores: tuple[int, float]) -> None:
         """Record when stores' periods took effect, as an earlier run would have.
@@ -199,6 +199,7 @@ class ServeTest(Volume):
                 "chat_retention_days": 30,
                 "chat_retention_since": "2025-08-16T12:00:00Z",
                 "note_retention_since": "2025-08-16T12:00:00Z",
+                "file_retention_since": "2025-08-16T12:00:00Z",
                 "notice_days": 30,
                 "interval_s": 10,
                 "chat_every_s": CHAT_EVERY_S,
@@ -236,6 +237,7 @@ class ServeTest(Volume):
         self.assertEqual(criteria["notice_days"], 30)
         self.assertEqual(criteria["chat_retention_since"], "2025-08-16T12:00:00Z")
         self.assertEqual(criteria["note_retention_since"], "2025-08-16T12:00:00Z")
+        self.assertEqual(criteria["file_retention_since"], "2025-08-16T12:00:00Z")
 
     def test_audio_off_leaves_the_caches(self) -> None:
         """OPEN_WEBUI_AUDIO_RETENTION_MINUTES=off keeps every recording."""
@@ -297,7 +299,11 @@ class RefusalTest(Volume):
         refused = [event for event in events(stream) if event["operation"] == "retention.refused"]
         self.assertEqual(
             [event["criteria"] for event in refused],
-            [{"store": "chats", "reason": "schema"}, {"store": "notes", "reason": "schema"}],
+            [
+                {"store": "chats", "reason": "schema"},
+                {"store": "notes", "reason": "schema"},
+                {"store": "files", "reason": "schema"},
+            ],
         )
         self.assertEqual(rounds.stores["chats"].state, "refused")
         owui_retention.write_status(self.settings.status_file, owui_retention.Status(NOW + 60, 10, rounds.stores))
@@ -314,8 +320,8 @@ class RefusalTest(Volume):
             self.store.conn.execute("UPDATE alembic_version SET version_num = 'e42c8f710a36'")
             rounds.run(NOW + 60)
         operations = [event["operation"] for event in events(stream)]
-        self.assertEqual(operations.count("retention.refused"), 2)
-        self.assertEqual(operations.count("retention.resumed"), 2)
+        self.assertEqual(operations.count("retention.refused"), 3)
+        self.assertEqual(operations.count("retention.resumed"), 3)
         self.assertEqual(rounds.stores["chats"].state, "ok")
         self.assertEqual(chain_problems(stream), [])
 
@@ -409,6 +415,19 @@ class RefusalTest(Volume):
         self.assertEqual([event["target"]["kind"] for event in deletions(stream)], ["note"])
         self.assertNotIn(old, remaining)
         self.assertEqual(rounds.stores["notes"].state, "ok")
+
+    def test_old_uploads_go_with_the_chats_period(self) -> None:
+        """Uploads from before the intake was closed are swept in the same round, row and file."""
+        old = self.store.upload(ALICE, created_days=40)
+        (self.data / "uploads").mkdir()
+        disk = self.data / "uploads" / f"{old}_upload.txt"
+        disk.write_text("x", encoding="utf-8")
+        rounds, stream = self.rounds(self.settings)
+        rounds.run(NOW)
+        self.assertEqual(self.store.count("file", "id = ?", (old,)), 0)
+        self.assertFalse(disk.exists())
+        self.assertIn("upload", [event["target"]["kind"] for event in deletions(stream)])
+        self.assertEqual(rounds.stores["files"].state, "ok")
 
     def test_notes_have_their_own_grace(self) -> None:
         """A notes period seen for the first time waits its notice, even when chats are past theirs."""
@@ -541,6 +560,17 @@ class DryRunTest(Volume):
         self.assertIn("rule: files older than 60 minutes", text)
         self.assertIn("Chats (webui.db)\n  retention: off; nothing is deleted", text)
         self.assertIn("make retention-dry-run CHAT_DAYS=<n>", text)
+
+    def test_dry_run_counts_uploads_and_their_vectors(self) -> None:
+        """Uploads are counted with the chats' period; the report says how to clear their vectors."""
+        self.store.upload(ALICE, created_days=40)
+        self.store.upload(BOB, created_days=5)
+        status, text = self.report(audio_minutes=60, chat_days=30)
+        self.assertEqual(status, 0)
+        self.assertIn("Uploads (webui.db and uploads/; from before the intake was closed)\n", text)
+        self.assertIn("  would delete: 1 upload\n  keeps: 1 upload\n", text)
+        self.assertIn("Reset vector storage", text)
+        self.assertNotIn(SENTINEL, text)
 
     def test_dry_run_counts_notes(self) -> None:
         """Notes are counted with the chats' period, and named by count only."""
