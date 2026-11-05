@@ -190,6 +190,19 @@ services:
       USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS: false
       USER_PERMISSIONS_FEATURES_MEMORIES: false
       ENABLE_MEMORIES: false
+      # No notes: they are user content no other route cleans up. The pinned
+      # image's notes router checks notes.enable on every route itself
+      # (routers/notes.py, check_notes_access); notes written before are
+      # deleted by the retention service with the chats' period.
+      ENABLE_NOTES: false
+      USER_PERMISSIONS_FEATURES_NOTES: false
+      # The retention period, announced to everyone: chats are deleted that
+      # many days after they were started (the retention service). The text
+      # takes the period from the retention service's variable, and so does
+      # its id: the UI remembers a dismissed banner by id, so a changed
+      # period is announced again. German via the banner's i18n (the UI's
+      # locale code).
+      WEBUI_BANNERS: '[{"id":"retention-period-${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365}","type":"info","title":"","content":"Chats are deleted automatically ${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365} days after they were started.","dismissible":true,"timestamp":1793836800,"i18n":{"de-DE":{"content":"Chats werden ${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365} Tage nach ihrem Beginn automatisch gelöscht."}}}]'
       # No message ratings: rating an answer stores a full copy of the chat
       # with the rating (the feedback's `snapshot`). The copy outlives the
       # chat, and admins could read it through the evaluation routes whatever
@@ -271,9 +284,11 @@ services:
   # retention — deletes what Open WebUI itself never deletes
   # (CLAUDE.md § Retention): speech-to-text recordings with
   # their transcripts and text-to-speech output after
-  # OPEN_WEBUI_AUDIO_RETENTION_MINUTES (default 60), and,
-  # only when OPEN_WEBUI_CHAT_RETENTION_DAYS is set, chats
-  # unchanged for that many days. Every deletion is a
+  # OPEN_WEBUI_AUDIO_RETENTION_MINUTES (default 60), and
+  # chats OPEN_WEBUI_CHAT_RETENTION_DAYS (default 365) after
+  # they were started. A period that is new or changed
+  # deletes nothing for RETENTION_NOTICE_DAYS (default 30)
+  # after it took effect. Every deletion is a
   # `delete` event of the data-protection audit log in this
   # container's log; a deletion that cannot be recorded does
   # not happen. Stdlib Python mounted read-only; nothing is
@@ -305,9 +320,13 @@ services:
       # Minutes after which a recording, its transcript or a text-to-speech
       # file is deleted; `off` keeps them (as upstream does).
       OPEN_WEBUI_AUDIO_RETENTION_MINUTES: ${OPEN_WEBUI_AUDIO_RETENTION_MINUTES:-60}
-      # Days without a change after which a chat is deleted. Unset (the
-      # default) or `off`: no chat is ever deleted.
-      OPEN_WEBUI_CHAT_RETENTION_DAYS: ${OPEN_WEBUI_CHAT_RETENTION_DAYS:-}
+      # Days after a chat was started at which it is deleted, however
+      # recently it changed; empty means the default. `off` keeps every chat
+      # (development only; logged as a warning and stated in the audit log).
+      OPEN_WEBUI_CHAT_RETENTION_DAYS: ${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365}
+      # Days a period that is new or changed deletes nothing, so what is
+      # already older than it is announced first.
+      RETENTION_NOTICE_DAYS: ${RETENTION_NOTICE_DAYS:-30}
       OPEN_WEBUI_RETENTION_INTERVAL_S: ${OPEN_WEBUI_RETENTION_INTERVAL_S:-300}
       # Only whether DATABASE_URL is set, never its value: Open WebUI then
       # keeps its chats outside webui.db, and chat retention refuses.

@@ -44,7 +44,7 @@ To run Open WebUI usefully, `inference-net` must exist and an upstream OpenAI-co
 
 **Signed user attribution at the router.** The router (`vllm-service`) records one `ai_call` event per model call, but every caller shares its master key, so on its own it cannot name the person behind an Open WebUI call. With `OPEN_WEBUI_FORWARD_JWT_SECRET` set, `compose.yaml` turns on `ENABLE_FORWARD_USER_INFO_HEADERS` and passes the value as `FORWARD_USER_INFO_HEADER_JWT_SECRET`. Every call to the endpoint then carries one HS256 token in `X-OpenWebUI-User-Jwt` (`sub`, `email`, `name`, `role`, `iss: open-webui`, `exp`); the router, given the same value as `AUDIT_OPENWEBUI_JWT_SECRET`, verifies it and records the e-mail as the call's actor (vllm-service `docs/audit.md`). The token lives 60 s (`FORWARD_USER_INFO_HEADER_JWT_EXPIRES_SECONDS`, upstream default 300): it is minted per call and checked as the call arrives, so a short lifetime only narrows the replay window. The secret itself switches forwarding on (`${OPEN_WEBUI_FORWARD_JWT_SECRET:+true}`), never without it: forwarding with no secret sends the user's name, id, e-mail and role as plain `X-OpenWebUI-User-*` headers, which any caller on `inference-net` could send too. Unset, nothing is forwarded and the router names no Open WebUI user. The secret is used for nothing else — not `WEBUI_SECRET_KEY` (the session key) and not the endpoint's API key; whoever holds it could mis-attribute router events, not mint Open WebUI sessions. Rotation: change it in both `.env` files and restart both stacks. Verified against the pinned image's `env.py` and `utils/headers.py`; re-check on an image bump.
 
-**No content intake.** Open WebUI is a chat UI here, not a document store: documents and personal facts belong in the apps that audit what they store. Chat file and web uploads, knowledge bases and memories are therefore off. `compose.yaml` sets `USER_PERMISSIONS_CHAT_FILE_UPLOAD=false`, `USER_PERMISSIONS_CHAT_WEB_UPLOAD=false`, `USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS=false` (already the upstream default, pinned), `USER_PERMISSIONS_FEATURES_MEMORIES=false` and `ENABLE_MEMORIES=false`; with `ENABLE_PERSISTENT_CONFIG=false` these load from env on every boot. The flags only hide the controls, with one exception: `ENABLE_MEMORIES=false` the server enforces itself. In the pinned image the files router never checks the upload permission (only the UI does), and admins pass the knowledge permission. So `edge-guard` does the enforcing: it answers `403` (JSON `detail`) to `POST`/`PUT`/`PATCH` under `/api/v1/files`, `/api/v1/knowledge` and `/api/v1/retrieval/process`, for every account. It matches on nginx's decoded, normalized path, ignoring case. Reading and deleting existing files and knowledge bases still works, as do `…/file/remove` and `…/reset`, so anything stored before can be cleaned up. Attaching a file or pasting an image into a chat fails with that `403`. Verified against the pinned image's `routers/files.py`, `knowledge.py`, `retrieval.py`, `memories.py` and `models/config.py`; re-check the route list on an image bump.
+**No content intake.** Open WebUI is a chat UI here, not a document store: documents and personal facts belong in the apps that audit what they store. Chat file and web uploads, knowledge bases, memories and notes are therefore off (notes: § Retention). `compose.yaml` sets `USER_PERMISSIONS_CHAT_FILE_UPLOAD=false`, `USER_PERMISSIONS_CHAT_WEB_UPLOAD=false`, `USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS=false` (already the upstream default, pinned), `USER_PERMISSIONS_FEATURES_MEMORIES=false` and `ENABLE_MEMORIES=false`; with `ENABLE_PERSISTENT_CONFIG=false` these load from env on every boot. The flags only hide the controls, with one exception: `ENABLE_MEMORIES=false` the server enforces itself. In the pinned image the files router never checks the upload permission (only the UI does), and admins pass the knowledge permission. So `edge-guard` does the enforcing: it answers `403` (JSON `detail`) to `POST`/`PUT`/`PATCH` under `/api/v1/files`, `/api/v1/knowledge` and `/api/v1/retrieval/process`, for every account. It matches on nginx's decoded, normalized path, ignoring case. Reading and deleting existing files and knowledge bases still works, as do `…/file/remove` and `…/reset`, so anything stored before can be cleaned up. Attaching a file or pasting an image into a chat fails with that `403`. Verified against the pinned image's `routers/files.py`, `knowledge.py`, `retrieval.py`, `memories.py` and `models/config.py`; re-check the route list on an image bump.
 
 **No message ratings.** Rating an answer stores a full copy of the chat with the rating (the `feedback` row's `snapshot`). The copy outlives the chat in Open WebUI's own delete, and an admin can read it through `GET /api/v1/evaluations/feedback/{id}` (any rating) and `GET /api/v1/evaluations/feedbacks/all/export`, whatever `ENABLE_ADMIN_CHAT_ACCESS` says. `compose.yaml` sets `ENABLE_MESSAGE_RATING=false` and `USER_PERMISSIONS_CHAT_RATE_RESPONSE=false`, which only hide the controls: the pinned image's `routers/evaluations.py` checks neither. So `edge-guard` refuses, with `403` (JSON `detail`) and for every account, creating or updating a rating (`POST`/`PUT`/`PATCH` under `/api/v1/evaluations/feedback`), reading a single rating (`GET`/`HEAD` `/api/v1/evaluations/feedback/<id>`) and the export, matched like the intake routes. The lists (`/feedbacks/user`, `/feedbacks/list`, `/feedbacks/all/ids`) and the leaderboard carry no snapshot and still pass, as do the deletes, so ratings stored before can be cleared; the chat sweeper also removes a chat's ratings with it. Verified against the pinned image's `routers/evaluations.py` and `models/feedbacks.py`; re-check on an image bump.
 
@@ -96,8 +96,8 @@ Reachable at `https://<EDGE_HOST>:8443/` once both stacks are up.
 ## Retention
 
 Open WebUI deletes neither the files its audio endpoints leave on
-`open-webui-data` nor, having no retention setting, any chat. The `retention`
-service does, and records every deletion as a `delete` event of the
+`open-webui-data` nor, having no retention setting, any chat, note or upload.
+The `retention` service does, and records every deletion as a `delete` event of the
 federation's data-protection audit log: hash-chained lines
 (`service: open-webui-service`) in that container's log, which obs-plane
 collects. Code: `retention/`, stdlib Python mounted read-only into the pinned
@@ -119,9 +119,22 @@ no network and `open-webui-data` at `/data`.
   again with `outcome: error`. Verified against the pinned image's
   `routers/audio/__init__.py` and `routers/openai.py` (which caches speech into
   the same directory).
-- **Chats, off by default.** With `OPEN_WEBUI_CHAT_RETENTION_DAYS` set, every
-  chat not changed for that many days (its `updated_at`, or `created_at` where
-  that is missing) is deleted at start and then hourly, in Open WebUI's SQLite
+- **The retention period, on by default.** `OPEN_WEBUI_CHAT_RETENTION_DAYS`
+  (compose default 365; `off` only for development, logged as a warning and
+  stated in the chain's `config.audit`) is how long chats, notes and uploads
+  are kept after they were *created*. Using or continuing one never extends
+  it; there is no extension of any kind. A period that is new on the host, or
+  changed, deletes nothing for `RETENTION_NOTICE_DAYS` (default 30) after it
+  took effect, recorded per store (`chats`, `notes`, `files`) in
+  `/data/.retention-state.json` (mode 0600; a file that cannot be read or
+  parsed refuses that store, `reason: state`). The `config.audit` event states
+  the period, the notice and when each store's period took effect. A banner
+  (`WEBUI_BANNERS`, English and German via its `i18n`, the UI's `de-DE`) tells
+  every user that chats are deleted that many days after they were started;
+  a notice per chat would need a change to the upstream UI.
+- **Chats.** Every chat started more than the period ago (its `created_at`, or
+  `updated_at` where that is missing; neither: kept) is deleted at start and
+  then hourly, in Open WebUI's SQLite
   database (`webui.db`) while Open WebUI keeps running. With it go its messages
   (`chat_message`), shared snapshots (`shared_chat`) and their access grants,
   file links (`chat_file`), comments and their reactions, the notifications
@@ -133,6 +146,28 @@ no network and `open-webui-data` at `/data`.
   link; uploaded files and folders belong to their owner and stay. Pinned and
   archived chats are not exempt. An internal chat whose parent still exists
   lives as long as the parent; one whose parent is gone expires on its own age.
+  A note's chat (`meta.note_id`) is due once its note is gone.
+- **Notes, switched off.** `ENABLE_NOTES=false` and
+  `USER_PERMISSIONS_FEATURES_NOTES=false`; the pinned image's notes router
+  checks `notes.enable` on every route (`routers/notes.py`
+  `check_notes_access`), admins included. Notes written before are deleted
+  once they were created more than the period ago (their `created_at` is in
+  nanoseconds), with their pins (`pinned_note`), comments and reactions,
+  notifications and access grants (`retention/note_retention.py`, from
+  `models/notes.py` and `models/comments.py`).
+- **Uploads from before the intake was closed.** Every `file` row created more
+  than the period ago goes with its chat and knowledge links, its access grants
+  and the file in `/data/uploads/` (by base name, as the image deletes it; a
+  recorded path outside `/app/backend/data/uploads/` keeps its row, logged; a
+  symlink is removed itself, never its target). The record names uploads by id
+  only (`kind: upload`). What the image derived into its vector store
+  (`file-<id>` in Chroma) is beyond the stdlib sidecar: every upload record
+  says so (`vectors_left_in_store: true`), the sweep logs a warning, the dry
+  run mentions it while uploads are due, and an admin clears it with *Reset
+  vector storage* (Admin settings, Documents). A `uploads/` that is a symlink
+  or not a directory refuses the store (`reason: not_a_directory`); a name in
+  it that is not a regular file or link keeps its row, logged. Verified against `models/files.py`, `routers/files.py`
+  and `storage/provider.py`.
   Upstream's own delete (`models/chats.py`, `routers/chats.py`) leaves the share
   grants, the ratings and the file links behind; the declared cascades never
   fire, as Open WebUI does not enable SQLite's foreign keys.
@@ -160,7 +195,8 @@ no network and `open-webui-data` at `/data`.
   `BEGIN IMMEDIATE` transactions of at most 50 chats and 200 ids (a chat with
   more internal chats than that goes alone), each waiting up to 30 s for the
   write lock, with a pause between batches so Open WebUI's
-  own writes (busy timeout 5 s) get through. `secure_delete` overwrites the
+  own writes (busy timeout 5 s) get through; notes and uploads are swept the
+  same way. `secure_delete` overwrites the
   deleted rows in the database file instead of leaving them in free pages.
   Earlier versions of those rows can still sit in the write-ahead log
   (`webui.db-wal`), so a sweep that deleted chats ends with a `TRUNCATE`

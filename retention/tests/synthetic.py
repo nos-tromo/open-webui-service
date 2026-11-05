@@ -129,6 +129,79 @@ class Store:
             owner, age_days=age_days, meta={"internal": True, "type": "subagent", "parent_chat_id": parent}
         )
 
+    def note(self, owner: str | None, *, created_days: float, note_id: str | None = None) -> str:
+        """Add a note, timed as Open WebUI times notes: in nanoseconds.
+
+        Args:
+            owner: The owner's user id.
+            created_days: Days since it was created.
+            note_id: Its id; a fresh one by default.
+
+        Returns:
+            The note id.
+        """
+        note = note_id or self._id("note")
+        created = int((NOW - created_days * DAY) * 1_000_000_000)
+        self.conn.execute(
+            "INSERT INTO note (id, user_id, title, data, meta, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (note, owner, f"{SENTINEL} note", json.dumps({"content": {"md": SENTINEL}}), "{}", created, created),
+        )
+        return note
+
+    def note_related(self, note_id: str, owner: str) -> None:
+        """Add one row of every kind that belongs to a note: a pin, a comment with a reaction, a notification, a grant.
+
+        Args:
+            note_id: The note.
+            owner: Its owner.
+        """
+        self.conn.execute(
+            "INSERT INTO pinned_note (id, user_id, note_id, created_at) VALUES (?, ?, ?, ?)",
+            (self._id("pin"), owner, note_id, NOW),
+        )
+        comment = self._id("comment")
+        self.conn.execute(
+            "INSERT INTO comment (id, user_id, resource_type, resource_id, content, created_at, updated_at) "
+            "VALUES (?, ?, 'note', ?, ?, ?, ?)",
+            (comment, owner, note_id, f"{SENTINEL} comment", NOW, NOW),
+        )
+        self.conn.execute(
+            "INSERT INTO comment_reaction (id, user_id, comment_id, name, created_at) VALUES (?, ?, ?, 'thumbsup', ?)",
+            (self._id("reaction"), BOB, comment, NOW),
+        )
+        self.conn.execute(
+            "INSERT INTO notification (id, user_id, event_type, event_key, actor_type, resource_type, resource_id, "
+            "object_type, object_id, data, created_at, updated_at) "
+            "VALUES (?, ?, 'comment', ?, 'user', 'note', ?, 'comment', ?, ?, ?, ?)",
+            (self._id("notif"), owner, self._id("key"), note_id, comment, json.dumps({"text": SENTINEL}), NOW, NOW),
+        )
+        self.conn.execute(
+            "INSERT INTO access_grant (id, resource_type, resource_id, principal_type, principal_id, permission, "
+            "created_at) VALUES (?, 'note', ?, 'user', ?, 'read', ?)",
+            (self._id("grant"), note_id, BOB, NOW),
+        )
+
+    def upload(self, owner: str | None, *, created_days: float, path: str | None = None) -> str:
+        """Add an uploaded file's row the way the pinned image writes it (seconds; path under its upload dir).
+
+        Args:
+            owner: The owner's user id.
+            created_days: Days since it was uploaded.
+            path: Its recorded path; ``/app/backend/data/uploads/<id>_upload.txt`` by default.
+
+        Returns:
+            The file id.
+        """
+        file_id = self._id("file")
+        recorded = path if path is not None else f"/app/backend/data/uploads/{file_id}_upload.txt"
+        created = int(NOW - created_days * DAY)
+        self.conn.execute(
+            "INSERT INTO file (id, user_id, filename, meta, data, path, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (file_id, owner, f"{SENTINEL}.txt", "{}", json.dumps({"content": SENTINEL}), recorded, created, created),
+        )
+        return file_id
+
     def message(self, chat_id: str, owner: str) -> str:
         """Add a message to a chat.
 

@@ -29,8 +29,12 @@ Automation runs that point at the chat keep their record and lose the link
 (``chat_id`` set to NULL), as upstream does. Uploaded files belong to their
 owner, not to a chat, and are not touched. An internal chat whose parent still
 exists lives and dies with it; one whose parent is gone expires on its own age.
-A chat's age is its ``updated_at`` (``created_at`` where that is missing), in
-seconds, as Open WebUI writes both.
+A chat's age is the time since it was started, its ``created_at``
+(``updated_at`` where that is missing), in seconds, as Open WebUI writes both:
+a chat that is continued keeps its oldest messages, so continuing it does not
+keep it. A chat with neither time is never deleted. A note's chat (an internal
+chat with ``meta.note_id``) goes with its note: once the note is gone it is
+due, whatever its age.
 
 Schema guard: before anything is read for deletion, and again inside every
 write transaction, :func:`schema_problems` checks the database's migration
@@ -76,10 +80,14 @@ VERIFIED_REVISIONS: Final = frozenset({"e42c8f710a36"})
 REQUIRED_COLUMNS: Final[Mapping[str, frozenset[str]]] = {
     "alembic_version": frozenset({"version_num"}),
     "chat": frozenset({"id", "user_id", "created_at", "updated_at", "meta"}),
+    "note": frozenset({"id", "user_id", "created_at"}),
+    "pinned_note": frozenset({"note_id"}),
+    "file": frozenset({"id", "user_id", "created_at", "path"}),
+    "knowledge_file": frozenset({"file_id"}),
     "chat_message": frozenset({"chat_id"}),
     "shared_chat": frozenset({"chat_id"}),
     "access_grant": frozenset({"resource_type", "resource_id"}),
-    "chat_file": frozenset({"chat_id"}),
+    "chat_file": frozenset({"chat_id", "file_id"}),
     "comment": frozenset({"id", "resource_type", "resource_id"}),
     "comment_reaction": frozenset({"comment_id"}),
     "notification": frozenset({"resource_type", "resource_id"}),
@@ -118,10 +126,14 @@ def _json(path: str, column: str = "meta") -> str:
     return f"(CASE WHEN json_valid({column}) THEN json_extract({column}, '{path}') END)"
 
 
-#: A chat that has not changed since the cutoff (bound twice).
-_EXPIRED: Final = "(updated_at < ? OR (updated_at IS NULL AND created_at < ?))"
-_CHANGED: Final = "COALESCE(updated_at, created_at)"
 _INTERNAL: Final = f"{_json('$.internal')} IS 1"
+#: A note's chat whose note no longer exists.
+_ORPHANED_NOTE_CHAT: Final = (
+    f"({_INTERNAL} AND {_json('$.note_id')} IS NOT NULL AND {_json('$.note_id')} NOT IN (SELECT id FROM note))"
+)
+#: A chat started before the cutoff (bound twice), or a note chat without its note.
+_EXPIRED: Final = f"((created_at < ? OR (created_at IS NULL AND updated_at < ?)) OR {_ORPHANED_NOTE_CHAT})"
+_STARTED: Final = "COALESCE(created_at, updated_at)"
 
 
 @dataclass(frozen=True)
@@ -438,16 +450,16 @@ class Family:
     Attributes:
         root: The expired chat.
         ids: The root first, then its internal descendants.
-        changed_at: When the root last changed, in seconds since the epoch.
+        started_at: When the root was started, in seconds since the epoch.
     """
 
     root: str
     ids: tuple[str, ...]
-    changed_at: int | None
+    started_at: int | None
 
 
 def list_owners(conn: sqlite3.Connection, cutoff: int) -> list[str | None]:
-    """List the accounts that have chats unchanged since the cutoff.
+    """List the accounts that have chats started before the cutoff, or note chats without their note.
 
     Args:
         conn: The connection.
@@ -460,10 +472,14 @@ def list_owners(conn: sqlite3.Connection, cutoff: int) -> list[str | None]:
     # without reading the chat rows, which hold whole conversations.
     owners: set[str | None] = set()
     for sql in (
-        "SELECT DISTINCT user_id FROM chat WHERE updated_at < ?",
-        "SELECT DISTINCT user_id FROM chat WHERE updated_at IS NULL AND created_at < ?",
+        "SELECT DISTINCT user_id FROM chat WHERE created_at < ?",
+        "SELECT DISTINCT user_id FROM chat WHERE created_at IS NULL AND updated_at < ?",
     ):
         owners.update(None if row[0] is None else str(row[0]) for row in conn.execute(sql, (cutoff,)))
+    owners.update(
+        None if row[0] is None else str(row[0])
+        for row in conn.execute(f"SELECT DISTINCT user_id FROM chat WHERE {_ORPHANED_NOTE_CHAT}")
+    )
     return sorted(owners, key=lambda owner: (owner is not None, owner or ""))
 
 
@@ -494,10 +510,10 @@ def plan_owner(conn: sqlite3.Connection, owner: str | None, cutoff: int) -> list
         children.setdefault(parent, []).append(child)
     families: list[Family] = []
     rows = conn.execute(
-        f"SELECT id, {_CHANGED} FROM chat WHERE user_id IS ? AND {_EXPIRED} ORDER BY {_CHANGED}, id",
+        f"SELECT id, {_STARTED} FROM chat WHERE user_id IS ? AND {_EXPIRED} ORDER BY {_STARTED}, id",
         (owner, cutoff, cutoff),
     )
-    for chat_id, changed_at in rows:
+    for chat_id, started_at in rows:
         root = str(chat_id)
         if root in parents:
             continue
@@ -511,7 +527,7 @@ def plan_owner(conn: sqlite3.Connection, owner: str | None, cutoff: int) -> list
             seen.add(child)
             ids.append(child)
             queue.extend(children.get(child, []))
-        families.append(Family(root, tuple(ids), None if changed_at is None else int(changed_at)))
+        families.append(Family(root, tuple(ids), None if started_at is None else int(started_at)))
     return families
 
 
@@ -547,8 +563,8 @@ class ChatPreview:
         chats: Chats that would be deleted, internal ones included.
         internal: How many of them are internal chats going with their parent.
         owners: The accounts they belong to.
-        oldest: When the longest-unchanged one last changed.
-        newest: When the most recently changed one last changed.
+        oldest: When the earliest-started one was started.
+        newest: When the latest-started one was started.
         related: The related rows, by criteria key.
         tags: Tags no remaining chat would use.
         kept: Chats that would stay.
@@ -585,9 +601,9 @@ def preview(conn: sqlite3.Connection, cutoff: int) -> ChatPreview:
         result.chats += len(ids)
         result.internal += len(ids) - len(families)
         for family in families:
-            if family.changed_at is not None:
-                result.oldest = min(result.oldest or family.changed_at, family.changed_at)
-                result.newest = max(result.newest or family.changed_at, family.changed_at)
+            if family.started_at is not None:
+                result.oldest = min(result.oldest or family.started_at, family.started_at)
+                result.newest = max(result.newest or family.started_at, family.started_at)
         for related in RELATED:
             result.related[related.key] += _count(conn, related, ids)
         result.tags += len(_orphaned_tags(_tag_usage(conn, owner), _tags_of(conn, ids), set(ids)))
@@ -652,7 +668,7 @@ class ChatSweeper:
         self._stop = stop or threading.Event()
 
     def sweep(self, now: float) -> ChatSweep:
-        """Delete every chat unchanged for the period, oldest first, per owner.
+        """Delete every chat started more than the period ago, oldest first, per owner.
 
         Args:
             now: The sweep's time, in seconds since the epoch.
@@ -707,7 +723,7 @@ class ChatSweeper:
             conn.close()
         if result.chats:
             LOG.info(
-                "chats: deleted %s of %s unchanged for %s, in %s",
+                "chats: deleted %s of %s started more than %s ago, in %s",
                 counted(result.chats, "chats"),
                 counted(result.owners, "accounts"),
                 counted(self._days, "days"),
@@ -733,7 +749,7 @@ class ChatSweeper:
             problems = schema_problems(conn)
             if problems:
                 raise SchemaRefused(problems)
-            # A chat changed since it was planned no longer expires.
+            # Planned without a lock: only chats still due (and still the owner's) go.
             roots = [family.root for family in batch]
             still = _existing(
                 conn,

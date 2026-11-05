@@ -71,7 +71,7 @@ is the only listener in front of it. It forwards the identity headers only
 when the request carries the gateway's secret (`OPEN_WEBUI_EDGE_SECRET`, the
 same value as in edge-plane's `.env`), and it refuses file uploads, knowledge
 bases and retrieval processing for every account, so documents are not stored
-here (memories are off too). It also refuses message ratings, each of which
+here (memories and notes are off too). It also refuses message ratings, each of which
 would keep a full copy of its chat that admins could read. Having no
 base-path support upstream,
 Open WebUI gets its own gateway port rather than a sub-path:
@@ -121,7 +121,8 @@ mandatory before any target.
 | `OPEN_WEBUI_HOST_PORT` | Host port for `make up-dev`. | `3000` |
 | `OPEN_WEBUI_FORWARD_JWT_SECRET` | Signs the per-call user token the router records; same value as vllm-service's `AUDIT_OPENWEBUI_JWT_SECRET`. Empty ⇒ no user information is forwarded. | empty |
 | `OPEN_WEBUI_AUDIO_RETENTION_MINUTES` | Minutes after which speech-to-text recordings, their transcripts and text-to-speech output are deleted; `off` keeps them. | `60` |
-| `OPEN_WEBUI_CHAT_RETENTION_DAYS` | Days without a change after which a chat is deleted, with everything that belongs only to it. Empty or `off` ⇒ no chat is deleted. | empty (off) |
+| `OPEN_WEBUI_CHAT_RETENTION_DAYS` | Days after a chat was started (a note or upload created) at which it is deleted, with everything that belongs only to it. `off` keeps them (development only). | `365` |
+| `RETENTION_NOTICE_DAYS` | Days a new or changed period deletes nothing after it took effect. | `30` |
 | `OPEN_WEBUI_RETENTION_INTERVAL_S` | Seconds between two sweeps of the audio caches (chats: at start, then hourly). | `300` |
 
 Model ids must name models the endpoint actually serves, and the same model
@@ -158,12 +159,17 @@ federation's data-protection audit log:
 - speech-to-text recordings with their transcripts, and text-to-speech output,
   60 minutes after they were written (`OPEN_WEBUI_AUDIO_RETENTION_MINUTES`;
   `off` keeps them);
-- chats, with everything that belongs only to them, once they have not changed
-  for `OPEN_WEBUI_CHAT_RETENTION_DAYS` days. Off until you set it.
+- chats, with everything that belongs only to them,
+  `OPEN_WEBUI_CHAT_RETENTION_DAYS` days after they were started (default 365),
+  however recently they changed; nothing extends it. A banner tells every user;
+- notes (switched off; those written before) and uploads from before the
+  intake was closed, by the same period after they were created.
 
-Before you turn chat retention on, see what it would delete:
-`make retention-dry-run CHAT_DAYS=90` prints counts and ages, never names or
-content, and deletes and records nothing. What belongs to a chat, how a
+A period that is new or changed deletes nothing for `RETENTION_NOTICE_DAYS`
+(default 30) after it took effect. See what it would delete:
+`make retention-dry-run` (or `CHAT_DAYS=180` for another period) prints counts,
+ages and the date deletion starts, never names or content, and deletes and
+records nothing. What belongs to a chat, how a
 deletion is recorded, and why a new Open WebUI image stops chat retention
 until it is verified: [`CLAUDE.md`](./CLAUDE.md) § Retention.
 

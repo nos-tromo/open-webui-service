@@ -217,17 +217,45 @@ class SweepTest(Workspace):
         self.assertNotIn("only_here", stream.getvalue(), "tag names describe content and are never recorded")
         self.assertNotIn("alice@example.org", stream.getvalue(), "the owner is named by account id only")
 
-    def test_age_is_the_last_change(self) -> None:
-        """updated_at decides; created_at stands in when it is missing; neither means kept."""
-        boundary = self.store.chat(ALICE, age_days=30)
-        old_but_changed = self.store.chat(ALICE, age_days=1, created_days=400)
-        undated_old = self.store.chat(ALICE, age_days=None, created_days=40)
-        undated = self.store.chat(ALICE, age_days=None, created_days=None)
-        expired = self.store.chat(ALICE, age_days=30.001)
+    def test_age_is_the_creation(self) -> None:
+        """created_at decides: a chat goes a period after it was started, however recently it changed."""
+        boundary = self.store.chat(ALICE, age_days=1, created_days=30)
+        started_long_ago = self.store.chat(ALICE, age_days=1, created_days=400)
+        young = self.store.chat(ALICE, age_days=1, created_days=29)
         self.sweep(30)
-        self.assertEqual(self.store.chat_ids(), {boundary, old_but_changed, undated})
-        self.assertNotIn(undated_old, self.store.chat_ids())
-        self.assertNotIn(expired, self.store.chat_ids())
+        self.assertEqual(self.store.chat_ids(), {boundary, young})
+        self.assertNotIn(started_long_ago, self.store.chat_ids())
+
+    def test_continued_chat_still_expires(self) -> None:
+        """Changed today, started a period and a day ago: deleted."""
+        continued = self.store.chat(ALICE, age_days=0, created_days=366)
+        self.sweep(365)
+        self.assertNotIn(continued, self.store.chat_ids())
+
+    def test_no_creation_falls_back_to_last_change(self) -> None:
+        """An old row without created_at expires by updated_at."""
+        undated_old = self.store.chat(ALICE, age_days=40, created_days=None)
+        self.store.conn.execute("UPDATE chat SET created_at = NULL WHERE id = ?", (undated_old,))
+        undated_young = self.store.chat(ALICE, age_days=2, created_days=None)
+        self.store.conn.execute("UPDATE chat SET created_at = NULL WHERE id = ?", (undated_young,))
+        self.sweep(30)
+        self.assertEqual(self.store.chat_ids(), {undated_young})
+
+    def test_no_dates_never_expires(self) -> None:
+        """A chat with neither date is kept; the preview counts it as kept."""
+        undated = self.store.chat(ALICE, age_days=None, created_days=None)
+        self.sweep(30)
+        self.assertEqual(self.store.chat_ids(), {undated})
+
+    def test_note_chat_without_its_note_is_due(self) -> None:
+        """A note's chat goes with its note: once the note is gone it is due, whatever its age."""
+        kept_note = self.store.note(ALICE, created_days=1)
+        with_note = self.store.chat(ALICE, age_days=1, meta={"internal": True, "type": "note", "note_id": kept_note})
+        orphan = self.store.chat(ALICE, age_days=1, meta={"internal": True, "type": "note", "note_id": "note-gone"})
+        result, _ = self.sweep(365)
+        self.assertEqual(result.chats, 1)
+        self.assertEqual(self.store.chat_ids(), {with_note})
+        self.assertNotIn(orphan, self.store.chat_ids())
 
     def test_one_record_per_owner(self) -> None:
         """Each record names the owner by Open WebUI's account id only, never by address or name."""
@@ -315,10 +343,9 @@ class SweepTest(Workspace):
         self.assertEqual(continuation["target"]["count"], 51)
         self.assertEqual(primary["target"]["ids"] + continuation["target"]["ids"], [parent, *children])
 
-    def test_chat_changed_after_planning_stays(self) -> None:
-        """Inside the transaction a chat that changed since the plan no longer expires."""
+    def test_continuing_a_chat_after_planning_does_not_keep_it(self) -> None:
+        """A chat written to between plan and transaction still goes: its start decides."""
         resumed = self.store.chat(ALICE, age_days=60)
-        expired = self.store.chat(ALICE, age_days=61)
         real_plan = chat_retention.plan_owner
 
         def plan_then_resume(conn: sqlite3.Connection, owner: str | None, cutoff: int) -> list[Any]:
@@ -327,8 +354,23 @@ class SweepTest(Workspace):
             return families
 
         with mock.patch.object(chat_retention, "plan_owner", plan_then_resume):
+            self.sweep(30)
+        self.assertEqual(self.store.chat_ids(), set())
+
+    def test_chat_deleted_after_planning_is_not_recorded(self) -> None:
+        """Inside the transaction a chat its owner deleted since the plan is skipped, and not recorded."""
+        gone = self.store.chat(ALICE, age_days=60)
+        expired = self.store.chat(ALICE, age_days=61)
+        real_plan = chat_retention.plan_owner
+
+        def plan_then_delete(conn: sqlite3.Connection, owner: str | None, cutoff: int) -> list[Any]:
+            families = real_plan(conn, owner, cutoff)
+            self.store.conn.execute("DELETE FROM chat WHERE id = ?", (gone,))
+            return families
+
+        with mock.patch.object(chat_retention, "plan_owner", plan_then_delete):
             _, stream = self.sweep(30)
-        self.assertEqual(self.store.chat_ids(), {resumed})
+        self.assertEqual(self.store.chat_ids(), set())
         (event,) = deletions(stream)
         self.assertEqual(event["target"]["ids"], [expired])
 
