@@ -46,7 +46,11 @@ ids, waiting up to :data:`BUSY_TIMEOUT_S` for the write lock and pausing between
 batches so Open WebUI's own writes get through. Each transaction writes its
 ``delete`` record before it commits and rolls back if the record cannot be
 written. ``secure_delete`` is on, so the deleted rows are overwritten with zeros
-in the database file instead of lingering in free pages. Stdlib only.
+in the database file instead of lingering in free pages. Earlier versions of
+those rows can still sit in the write-ahead log (``webui.db-wal``), in frames
+nothing has overwritten yet, so a sweep that deleted chats ends with a
+``TRUNCATE`` checkpoint (:func:`truncate_wal`): the zeroed pages replace the old
+ones in the database file and the log is emptied. Stdlib only.
 """
 
 from __future__ import annotations
@@ -213,6 +217,28 @@ def _quoted(name: str) -> str:
         The name in double quotes.
     """
     return '"' + name.replace('"', '""') + '"'
+
+
+def truncate_wal(conn: sqlite3.Connection) -> bool:
+    """Copy the write-ahead log into the database file and empty it.
+
+    ``secure_delete`` zeroes the pages a transaction writes, but the log can
+    still hold earlier versions of the deleted rows. A ``TRUNCATE`` checkpoint
+    copies every frame into the database file, where the zeroed pages replace
+    the old ones, and truncates the log to zero bytes. It waits for Open
+    WebUI's readers and writers up to the connection's busy timeout, and holds
+    off its writers while it copies.
+
+    Args:
+        conn: A read-write connection, outside any transaction.
+
+    Returns:
+        Whether the log was emptied: ``False`` when a reader or writer kept it
+        busy, so the next sweep's checkpoint or Open WebUI's own carries the
+        frames on. A database that is not in WAL mode has no log; ``True``.
+    """
+    busy, _, _ = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    return busy == 0
 
 
 def schema_problems(conn: sqlite3.Connection) -> list[str]:
@@ -580,6 +606,8 @@ class ChatSweep:
         complete: Whether everything expired was handled (else the batch cap
             or a stop ended the sweep early).
         database: Whether the database existed.
+        log_emptied: Whether the write-ahead log was emptied after the
+            deletions; ``None`` when nothing was deleted.
     """
 
     chats: int = 0
@@ -587,6 +615,7 @@ class ChatSweep:
     batches: int = 0
     complete: bool = True
     database: bool = True
+    log_emptied: bool | None = None
 
 
 class ChatSweeper:
@@ -667,6 +696,13 @@ class ChatSweeper:
                     result.owners += 1
                 if not result.complete:
                     break
+            if result.chats:
+                result.log_emptied = truncate_wal(conn)
+                if not result.log_emptied:
+                    LOG.warning(
+                        "chats: the write-ahead log stayed busy, so earlier versions of the deleted rows may stay "
+                        "in it until a later checkpoint"
+                    )
         finally:
             conn.close()
         if result.chats:

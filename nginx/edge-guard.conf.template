@@ -44,6 +44,22 @@ map "$request_method $uri" $owui_intake {
     "~*^(POST|PUT|PATCH) /api/v1/retrieval/process(/|$)"         1;
 }
 
+# Message ratings are refused for everyone, admins included. Rating an
+# answer stores a full copy of the chat with the rating (its `snapshot`),
+# and admins could read that copy through the single-rating and export
+# routes whatever ENABLE_ADMIN_CHAT_ACCESS says. compose hides the rating
+# controls, but upstream's routes check neither ENABLE_MESSAGE_RATING nor the
+# rate_response permission. So creating or updating a rating, reading one
+# rating and the export are refused; the lists, which carry no copy, and the
+# deletes still pass, so existing ratings can be cleared. Matched like the
+# intake above; HEAD is refused with GET, which upstream answers for it.
+map "$request_method $uri" $owui_rating {
+    default                                                        0;
+    "~*^(POST|PUT|PATCH) /api/v1/evaluations/feedback(/|$)"        1;
+    "~*^(GET|HEAD) /api/v1/evaluations/feedback/"                  1;
+    "~*^(GET|HEAD) /api/v1/evaluations/feedbacks/all/export(/|$)"  1;
+}
+
 server {
     listen 8080;
     server_tokens off;
@@ -68,6 +84,17 @@ server {
     location @intake_refused {
         default_type application/json;
         return 403 '{"detail":"Uploads, knowledge bases and retrieval processing are disabled in this deployment."}';
+    }
+
+    # Refused ratings (the map above) the same way; 419 is their internal
+    # hand-off.
+    error_page 419 = @rating_refused;
+    if ($owui_rating) {
+        return 419;
+    }
+    location @rating_refused {
+        default_type application/json;
+        return 403 '{"detail":"Message ratings are disabled in this deployment."}';
     }
 
     location / {

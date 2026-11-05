@@ -354,6 +354,41 @@ class SweepTest(Workspace):
         self.store.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         self.assertNotIn(SENTINEL.encode(), self.database.read_bytes())
 
+    def test_the_sweep_empties_the_write_ahead_log(self) -> None:
+        """No earlier version of a deleted row stays in webui.db-wal, nor in the database file."""
+        expired = self.store.chat(ALICE, age_days=60)
+        self.store.message(expired, ALICE)
+        self.store.related(expired, ALICE)
+        wal = self.database.with_name(f"{self.database.name}-wal")
+        self.assertIn(SENTINEL.encode(), wal.read_bytes())
+        result, _ = self.sweep(30)
+        self.assertEqual((result.chats, result.log_emptied), (1, True))
+        self.assertEqual(wal.stat().st_size, 0)
+        self.assertNotIn(SENTINEL.encode(), self.database.read_bytes())
+
+    def test_a_busy_log_is_left_to_a_later_checkpoint(self) -> None:
+        """A reader on an earlier snapshot keeps the log; the deletions stand, and the sweep says so."""
+        self.store.chat(ALICE, age_days=60)
+        reader = sqlite3.connect(self.database, isolation_level=None)
+        self.addCleanup(reader.close)
+        reader.execute("BEGIN")
+        reader.execute("SELECT count(*) FROM chat").fetchone()
+        with self.assertLogs("retention", "WARNING") as logged:
+            result, _ = self.sweep(30, busy_timeout_s=0.2)
+        reader.execute("ROLLBACK")
+        self.assertEqual((result.chats, result.log_emptied), (1, False))
+        self.assertIn("write-ahead log stayed busy", logged.output[0])
+        self.assertEqual(self.store.chat_ids(), set())
+
+    def test_nothing_deleted_leaves_the_log_alone(self) -> None:
+        """A sweep with nothing expired writes nothing and takes no checkpoint."""
+        self.store.chat(ALICE, age_days=1)
+        wal = self.database.with_name(f"{self.database.name}-wal")
+        before = wal.stat().st_size
+        result, _ = self.sweep(30)
+        self.assertEqual((result.chats, result.log_emptied), (0, None))
+        self.assertEqual(wal.stat().st_size, before)
+
     def test_missing_database_is_not_created(self) -> None:
         """Before Open WebUI's first start there is nothing to sweep, and nothing is created."""
         missing = self.tmp / "absent" / "webui.db"

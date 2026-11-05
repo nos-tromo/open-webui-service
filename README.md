@@ -71,7 +71,9 @@ is the only listener in front of it. It forwards the identity headers only
 when the request carries the gateway's secret (`OPEN_WEBUI_EDGE_SECRET`, the
 same value as in edge-plane's `.env`), and it refuses file uploads, knowledge
 bases and retrieval processing for every account, so documents are not stored
-here (memories are off too). Having no base-path support upstream,
+here (memories are off too). It also refuses message ratings, each of which
+would keep a full copy of its chat that admins could read. Having no
+base-path support upstream,
 Open WebUI gets its own gateway port rather than a sub-path:
 `https://<EDGE_HOST>:8443/`.
 

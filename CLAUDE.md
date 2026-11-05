@@ -46,6 +46,8 @@ To run Open WebUI usefully, `inference-net` must exist and an upstream OpenAI-co
 
 **No content intake.** Open WebUI is a chat UI here, not a document store: documents and personal facts belong in the apps that audit what they store. Chat file and web uploads, knowledge bases and memories are therefore off. `compose.yaml` sets `USER_PERMISSIONS_CHAT_FILE_UPLOAD=false`, `USER_PERMISSIONS_CHAT_WEB_UPLOAD=false`, `USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS=false` (already the upstream default, pinned), `USER_PERMISSIONS_FEATURES_MEMORIES=false` and `ENABLE_MEMORIES=false`; with `ENABLE_PERSISTENT_CONFIG=false` these load from env on every boot. The flags only hide the controls, with one exception: `ENABLE_MEMORIES=false` the server enforces itself. In the pinned image the files router never checks the upload permission (only the UI does), and admins pass the knowledge permission. So `edge-guard` does the enforcing: it answers `403` (JSON `detail`) to `POST`/`PUT`/`PATCH` under `/api/v1/files`, `/api/v1/knowledge` and `/api/v1/retrieval/process`, for every account. It matches on nginx's decoded, normalized path, ignoring case. Reading and deleting existing files and knowledge bases still works, as do `…/file/remove` and `…/reset`, so anything stored before can be cleaned up. Attaching a file or pasting an image into a chat fails with that `403`. Verified against the pinned image's `routers/files.py`, `knowledge.py`, `retrieval.py`, `memories.py` and `models/config.py`; re-check the route list on an image bump.
 
+**No message ratings.** Rating an answer stores a full copy of the chat with the rating (the `feedback` row's `snapshot`). The copy outlives the chat in Open WebUI's own delete, and an admin can read it through `GET /api/v1/evaluations/feedback/{id}` (any rating) and `GET /api/v1/evaluations/feedbacks/all/export`, whatever `ENABLE_ADMIN_CHAT_ACCESS` says. `compose.yaml` sets `ENABLE_MESSAGE_RATING=false` and `USER_PERMISSIONS_CHAT_RATE_RESPONSE=false`, which only hide the controls: the pinned image's `routers/evaluations.py` checks neither. So `edge-guard` refuses, with `403` (JSON `detail`) and for every account, creating or updating a rating (`POST`/`PUT`/`PATCH` under `/api/v1/evaluations/feedback`), reading a single rating (`GET`/`HEAD` `/api/v1/evaluations/feedback/<id>`) and the export, matched like the intake routes. The lists (`/feedbacks/user`, `/feedbacks/list`, `/feedbacks/all/ids`) and the leaderboard carry no snapshot and still pass, as do the deletes, so ratings stored before can be cleared; the chat sweeper also removes a chat's ratings with it. Verified against the pinned image's `routers/evaluations.py` and `models/feedbacks.py`; re-check on an image bump.
+
 Persistence: **external** volume `open-webui-data` → `/app/backend/data` (SQLite DB, users, chats, uploads, RAG vectors). Declared `external: true` in `compose.yaml`, it is created out-of-band by `make volumes` (like the network) and survives every app teardown — even `docker compose down -v`; only `make nuke` removes it (container `down`, then `docker volume rm`). Destroying it wipes all app state. The `retention` sidecar mounts it too, to delete what upstream keeps forever (§ Retention).
 
 ## Access — edge gateway SSO
@@ -160,6 +162,11 @@ no network and `open-webui-data` at `/data`.
   write lock, with a pause between batches so Open WebUI's
   own writes (busy timeout 5 s) get through. `secure_delete` overwrites the
   deleted rows in the database file instead of leaving them in free pages.
+  Earlier versions of those rows can still sit in the write-ahead log
+  (`webui.db-wal`), so a sweep that deleted chats ends with a `TRUNCATE`
+  checkpoint: the zeroed pages replace the old ones in the database file and
+  the log is emptied. When an Open WebUI reader keeps the log busy past the
+  busy timeout, the sweep logs a warning and a later checkpoint carries it.
 - **Schema guard.** Chat retention runs only on the schema it was verified
   against: migration revision `e42c8f710a36` (Open WebUI v0.13.0;
   `VERIFIED_REVISIONS` in `retention/chat_retention.py`), every column its
