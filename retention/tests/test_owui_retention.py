@@ -20,10 +20,12 @@ import owui_retention
 from audio_caches import AUDIO_CACHES
 from chat_retention import ChatSweep
 from owui_retention import CHAT_EVERY_S, Rounds, Settings, dry_run, health, schema_check, serve, verify
+from retention_state import STATE_NAME
 
 from tests.synthetic import (
     ALICE,
     BOB,
+    DAY,
     NOW,
     SENTINEL,
     FailingStream,
@@ -44,10 +46,19 @@ class SettingsTest(unittest.TestCase):
     """The operator's knobs and their defaults."""
 
     def test_defaults_keep_the_decisions(self) -> None:
-        """Audio caches on at 60 minutes, chats off, a 300-second round."""
+        """Audio caches on at 60 minutes, chats on at 365 days with a 30-day notice, a 300-second round."""
         settings = Settings.from_env({})
-        self.assertEqual((settings.audio_minutes, settings.chat_days, settings.interval_s), (60, None, 300))
+        self.assertEqual((settings.audio_minutes, settings.chat_days, settings.interval_s), (60, 365, 300))
+        self.assertEqual(settings.notice_days, 30)
         self.assertFalse(settings.external_database)
+
+    def test_notice_days_are_whole_days(self) -> None:
+        """RETENTION_NOTICE_DAYS takes 1 to 365 days, and never off."""
+        self.assertEqual(Settings.from_env({"RETENTION_NOTICE_DAYS": "14"}).notice_days, 14)
+        for value in ("0", "366", "off", "soon"):
+            with self.subTest(value=value), self.assertRaises(ValueError) as caught:
+                Settings.from_env({"RETENTION_NOTICE_DAYS": value})
+            self.assertIn("RETENTION_NOTICE_DAYS", str(caught.exception))
 
     def test_periods_are_whole_numbers_or_off(self) -> None:
         """A period is set by a whole number and switched off only by an explicit off."""
@@ -113,6 +124,16 @@ class Volume(unittest.TestCase):
             version_file=version,
             status_file=self.tmp / "status.json",
         )
+        self.since(chats=(30, NOW - 400 * DAY))
+
+    def since(self, **stores: tuple[int, float]) -> None:
+        """Record when stores' periods took effect, as an earlier run would have.
+
+        Args:
+            **stores: Per store, its period in days and when it took effect.
+        """
+        body = {"stores": {name: {"days": days, "since": since} for name, (days, since) in stores.items()}}
+        (self.data / STATE_NAME).write_text(json.dumps(body), encoding="utf-8")
 
     def serve_one_round(self, settings: Settings, stream: io.StringIO | None = None) -> tuple[int, io.StringIO]:
         """Run ``serve`` for exactly one round, at the test clock.
@@ -176,6 +197,8 @@ class ServeTest(Volume):
             {
                 "audio_max_age_minutes": 60,
                 "chat_retention_days": 30,
+                "chat_retention_since": "2025-08-16T12:00:00Z",
+                "notice_days": 30,
                 "interval_s": 10,
                 "chat_every_s": CHAT_EVERY_S,
                 "chat_external_database": False,
@@ -192,16 +215,25 @@ class ServeTest(Volume):
         self.assertEqual(chain_problems(stream), [])
         self.assertEqual(health(self.settings, now=NOW + 1), 0)
 
-    def test_defaults_delete_no_chat(self) -> None:
-        """With chat retention unset, the oldest chat stays and the database is not written."""
+    def test_off_deletes_no_chat_and_says_so(self) -> None:
+        """With chat retention off, the oldest chat stays, a warning is logged, and the chain states it."""
         self.store.chat(ALICE, age_days=4000)
         before = self.store.rows()
         settings = replace(self.settings, chat_days=None)
-        status, stream = self.serve_one_round(settings)
+        with self.assertLogs("retention", "WARNING") as logged:
+            status, stream = self.serve_one_round(settings)
         self.assertEqual(status, 0)
         self.assertEqual(self.store.rows(), before)
         self.assertEqual(deletions(stream), [])
         self.assertIsNone(events(stream)[1]["criteria"]["chat_retention_days"])
+        self.assertTrue(any("chat retention is off" in line for line in logged.output))
+
+    def test_config_states_the_notice_and_when_chats_took_effect(self) -> None:
+        """The chain's config event carries the notice days and the time chat retention took effect."""
+        _, stream = self.serve_one_round(self.settings)
+        criteria = events(stream)[1]["criteria"]
+        self.assertEqual(criteria["notice_days"], 30)
+        self.assertEqual(criteria["chat_retention_since"], "2025-08-16T12:00:00Z")
 
     def test_audio_off_leaves_the_caches(self) -> None:
         """OPEN_WEBUI_AUDIO_RETENTION_MINUTES=off keeps every recording."""
@@ -307,6 +339,61 @@ class RefusalTest(Volume):
         self.assertEqual(rounds.stores["chats"].state, "ok")
         self.assertEqual(self.store.chat_ids(), set())
 
+    def test_first_round_records_the_period_and_waits(self) -> None:
+        """A period seen for the first time takes effect now: nothing is deleted for the notice period."""
+        (self.data / STATE_NAME).unlink()
+        old = self.store.chat(ALICE, age_days=1, created_days=400)
+        rounds, stream = self.rounds(self.settings)
+        with self.assertLogs("retention", "INFO") as logged:
+            rounds.run(NOW)
+        self.assertIn(old, self.store.chat_ids())
+        self.assertEqual(deletions(stream), [])
+        state = json.loads((self.data / STATE_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(state["stores"]["chats"], {"days": 30, "since": NOW})
+        self.assertTrue(any("2026-10-20" in line for line in logged.output), logged.output)
+        self.assertEqual(rounds.stores["chats"].state, "ok")
+
+    def test_nothing_is_deleted_during_the_grace_period(self) -> None:
+        """29 days after the period took effect a 400-day-old chat stays; at 30 days it goes."""
+        self.since(chats=(30, NOW - 29 * DAY))
+        old = self.store.chat(ALICE, age_days=1, created_days=400)
+        rounds, _ = self.rounds(self.settings)
+        rounds.run(NOW)
+        self.assertIn(old, self.store.chat_ids())
+        later, _ = self.rounds(self.settings)
+        later.run(NOW + DAY)
+        self.assertNotIn(old, self.store.chat_ids())
+
+    def test_a_changed_period_restarts_the_grace(self) -> None:
+        """Lowering the period takes effect anew: nothing more is deleted before its notice has passed."""
+        self.since(chats=(365, NOW - 400 * DAY))
+        newly_due = self.store.chat(ALICE, age_days=1, created_days=200)
+        rounds, _ = self.rounds(replace(self.settings, chat_days=180))
+        rounds.run(NOW)
+        self.assertIn(newly_due, self.store.chat_ids())
+
+    def test_no_state_is_written_before_the_database_exists(self) -> None:
+        """On a fresh volume the chats store waits for Open WebUI's database; no period is recorded."""
+        (self.data / STATE_NAME).unlink()
+        self.store.close()
+        for name in ("webui.db", "webui.db-wal", "webui.db-shm"):
+            (self.data / name).unlink(missing_ok=True)
+        rounds, _ = self.rounds(self.settings)
+        rounds.run(NOW)
+        self.assertFalse((self.data / STATE_NAME).exists())
+
+    def test_a_damaged_state_refuses_chats(self) -> None:
+        """A state file that cannot be used refuses chat retention instead of restarting the grace."""
+        (self.data / STATE_NAME).write_text("not json", encoding="utf-8")
+        old = self.store.chat(ALICE, age_days=1, created_days=400)
+        rounds, stream = self.rounds(self.settings)
+        with self.assertLogs("retention", "ERROR"):
+            rounds.run(NOW)
+        self.assertIn(old, self.store.chat_ids())
+        self.assertEqual((rounds.stores["chats"].state, rounds.stores["chats"].reason), ("refused", "state"))
+        refused = [event for event in events(stream) if event["operation"] == "retention.refused"]
+        self.assertEqual(refused[0]["criteria"], {"store": "chats", "reason": "state"})
+
     def test_chats_are_swept_hourly(self) -> None:
         """After a complete chat sweep the next one waits an hour; the audio caches do not."""
         rounds, _ = self.rounds(self.settings)
@@ -410,7 +497,7 @@ class DryRunTest(Volume):
         self.assertEqual(sorted(path.name for path in (self.data / TRANSCRIPTIONS.relative).iterdir()), files)
         self.assertIn("would delete: 2 files, 3.0 KiB, last changed 2 h 0 min to 3 h 0 min ago", text)
         self.assertIn("keeps: 1 newer file\n", text)
-        self.assertIn("would delete: 3 chats of 2 accounts, last changed 40 d to 95 d ago", text)
+        self.assertIn("would delete: 3 chats of 2 accounts, started 40 d to 95 d ago", text)
         self.assertIn("of them internal chats going with their parent: 1", text)
         self.assertIn("messages 1", text)
         self.assertIn("ratings 1", text)
@@ -428,6 +515,15 @@ class DryRunTest(Volume):
         self.assertIn("rule: files older than 60 minutes", text)
         self.assertIn("Chats (webui.db)\n  retention: off; nothing is deleted", text)
         self.assertIn("make retention-dry-run CHAT_DAYS=<n>", text)
+
+    def test_dry_run_names_the_first_deletion_date(self) -> None:
+        """Inside the grace period the report says from when chats are deleted."""
+        self.since(chats=(30, NOW - 10 * DAY))
+        status, text = self.report(audio_minutes=60, chat_days=30)
+        self.assertEqual(status, 0)
+        self.assertIn("deletion starts: 2026-10-10T12:00:00Z (the notice period after the period took effect)", text)
+        status, text = self.report(audio_minutes=60, chat_days=90)
+        self.assertIn("deletion starts: 2026-10-20T12:00:00Z", text)
 
     def test_refused_schema_is_reported(self) -> None:
         """An unverified schema is reported with what does not match, and exit 1."""
@@ -452,7 +548,7 @@ class DryRunTest(Volume):
             self.assertEqual(owui_retention.main(["dry-run", "--chat-days", "30", "--audio-minutes", "off"]), 0)
             with mock.patch("sys.stderr", new_callable=io.StringIO):
                 self.assertEqual(owui_retention.main(["dry-run", "--chat-days", "0"]), 2)
-        self.assertIn("would delete: 1 chat of 1 account, last changed 40 d ago", out.getvalue())
+        self.assertIn("would delete: 1 chat of 1 account, started 40 d ago", out.getvalue())
         self.assertIn("(cache/audio/transcriptions)\n  retention: off; nothing is deleted", out.getvalue())
 
 

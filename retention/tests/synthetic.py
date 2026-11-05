@@ -129,6 +129,25 @@ class Store:
             owner, age_days=age_days, meta={"internal": True, "type": "subagent", "parent_chat_id": parent}
         )
 
+    def note(self, owner: str | None, *, created_days: float, note_id: str | None = None) -> str:
+        """Add a note, timed as Open WebUI times notes: in nanoseconds.
+
+        Args:
+            owner: The owner's user id.
+            created_days: Days since it was created.
+            note_id: Its id; a fresh one by default.
+
+        Returns:
+            The note id.
+        """
+        note = note_id or self._id("note")
+        created = int((NOW - created_days * DAY) * 1_000_000_000)
+        self.conn.execute(
+            "INSERT INTO note (id, user_id, title, data, meta, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (note, owner, f"{SENTINEL} note", json.dumps({"content": {"md": SENTINEL}}), "{}", created, created),
+        )
+        return note
+
     def message(self, chat_id: str, owner: str) -> str:
         """Add a message to a chat.
 

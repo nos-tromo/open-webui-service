@@ -60,6 +60,7 @@ from audio_caches import AUDIO_CACHES, CacheRefused, scan_cache, sweep_cache
 from audit_event import STREAM_MARKER, AuditEmitter, AuditWriteError, verify_chain
 from audit_runtime import open_audit_stream
 from chat_retention import ChatSweeper, SchemaRefused, open_database, preview, schema_problems
+from retention_state import STATE_NAME, RetentionState, StateRefused, deletion_allowed
 from sweep_events import SERVICE, SYSTEM, counted, iso_utc
 
 LOG = logging.getLogger("retention")
@@ -72,6 +73,9 @@ DATABASE_NAME: Final = "webui.db"
 DEFAULT_AUDIO_MINUTES: Final = 60
 MAX_AUDIO_MINUTES: Final = 527_040
 MAX_CHAT_DAYS: Final = 3_650
+DEFAULT_CHAT_DAYS: Final = 365
+DEFAULT_NOTICE_DAYS: Final = 30
+MAX_NOTICE_DAYS: Final = 365
 DEFAULT_INTERVAL_S: Final = 300
 MIN_INTERVAL_S: Final = 10
 MAX_INTERVAL_S: Final = 86_400
@@ -109,6 +113,47 @@ def parse_period(value: str | None, *, name: str, unit: str, default: int | None
     return int(text)
 
 
+def parse_notice(value: str | None) -> int:
+    """Parse ``RETENTION_NOTICE_DAYS``.
+
+    Args:
+        value: Whole days, or ``None``/blank for the default.
+
+    Returns:
+        The notice period in days.
+
+    Raises:
+        ValueError: If it is not a whole number from 1 to :data:`MAX_NOTICE_DAYS`.
+    """
+    days = parse_period(
+        value, name="RETENTION_NOTICE_DAYS", unit="days", default=DEFAULT_NOTICE_DAYS, maximum=MAX_NOTICE_DAYS
+    )
+    if days is None:
+        raise ValueError(f"RETENTION_NOTICE_DAYS must be whole days from 1 to {MAX_NOTICE_DAYS}, or off")
+    return days
+
+
+def chat_since(settings: Settings, now: float) -> float | None:
+    """Return when the chat period took effect, recording ``now`` for a new or changed period.
+
+    Args:
+        settings: The settings.
+        now: The current time.
+
+    Returns:
+        The time, or ``None`` when chat retention cannot run: it is off, Open
+        WebUI keeps its own database, or has not created ``webui.db`` yet (no
+        period is recorded then).
+
+    Raises:
+        StateRefused: If the state file cannot be used.
+        OSError: If it cannot be written.
+    """
+    if settings.chat_days is None or settings.external_database or not settings.database.is_file():
+        return None
+    return RetentionState.load(settings.state_file).effective_since(CHATS, settings.chat_days, now)
+
+
 def parse_interval(value: str | None) -> int:
     """Parse ``OPEN_WEBUI_RETENTION_INTERVAL_S``.
 
@@ -137,7 +182,9 @@ class Settings:
 
     Attributes:
         audio_minutes: The audio caches' period; ``None`` is off.
-        chat_days: The chats' period; ``None`` is off.
+        chat_days: The chats' period; ``None`` is off (development only).
+        notice_days: How long a period that took effect, or changed, deletes
+            nothing (``RETENTION_NOTICE_DAYS``).
         interval_s: Seconds between rounds.
         external_database: Open WebUI was given its own ``DATABASE_URL``, so
             ``webui.db`` is not where its chats are.
@@ -147,7 +194,8 @@ class Settings:
     """
 
     audio_minutes: int | None = DEFAULT_AUDIO_MINUTES
-    chat_days: int | None = None
+    chat_days: int | None = DEFAULT_CHAT_DAYS
+    notice_days: int = DEFAULT_NOTICE_DAYS
     interval_s: int = DEFAULT_INTERVAL_S
     external_database: bool = False
     data_dir: Path = DEFAULT_DATA_DIR
@@ -158,6 +206,11 @@ class Settings:
     def database(self) -> Path:
         """Open WebUI's SQLite database file."""
         return self.data_dir / DATABASE_NAME
+
+    @property
+    def state_file(self) -> Path:
+        """Where the time each period took effect is kept (:mod:`retention_state`)."""
+        return self.data_dir / STATE_NAME
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> Settings:
@@ -184,9 +237,10 @@ class Settings:
                 environ.get("OPEN_WEBUI_CHAT_RETENTION_DAYS"),
                 name="OPEN_WEBUI_CHAT_RETENTION_DAYS",
                 unit="days",
-                default=None,
+                default=DEFAULT_CHAT_DAYS,
                 maximum=MAX_CHAT_DAYS,
             ),
+            notice_days=parse_notice(environ.get("RETENTION_NOTICE_DAYS")),
             interval_s=parse_interval(environ.get("OPEN_WEBUI_RETENTION_INTERVAL_S")),
             external_database=(environ.get("RETENTION_EXTERNAL_DATABASE") or "").strip().lower() == "true",
         )
@@ -341,6 +395,7 @@ class Rounds:
         self.stores: dict[str, StoreStatus] = {cache.store: StoreStatus(audio) for cache in AUDIO_CACHES}
         self.stores[CHATS] = StoreStatus("off" if settings.chat_days is None else "pending")
         self._next_chats = 0.0
+        self._grace_logged = False
 
     def run(self, now: float) -> None:
         """Sweep every configured store once (chats only when due).
@@ -370,6 +425,30 @@ class Rounds:
             return
         if self._settings.external_database:
             self._refuse(CHATS, "external_database", "Open WebUI has its own DATABASE_URL; only webui.db is swept")
+            return
+        if not self._settings.database.is_file():
+            LOG.info("chats: Open WebUI has not created its database yet")
+            self._ok(CHATS, now)
+            self._next_chats = now + CHAT_EVERY_S
+            return
+        try:
+            since = chat_since(self._settings, now)
+        except StateRefused as exc:
+            self._refuse(CHATS, "state", str(exc))
+            return
+        except OSError as exc:
+            self._fail(CHATS, exc)
+            return
+        notice = self._settings.notice_days
+        if since is not None and not deletion_allowed(since=since, notice_days=notice, now=now):
+            if not self._grace_logged:
+                LOG.info(
+                    "chats: the retention period takes effect on %s; until then no chat is deleted",
+                    iso_utc(since + notice * 86_400),
+                )
+                self._grace_logged = True
+            self._ok(CHATS, now)
+            self._next_chats = now + CHAT_EVERY_S
             return
         sweeper = ChatSweeper(self._emitter, self._settings.database, days, stop=self._stop)
         try:
@@ -414,7 +493,8 @@ class Rounds:
 
         Args:
             store: The store.
-            reason: ``schema``, ``external_database`` or ``not_a_directory``.
+            reason: ``schema``, ``external_database``, ``not_a_directory`` or
+                ``state`` (the state file cannot be used).
             detail: What is wrong, by table, column or path name only.
         """
         status = self.stores[store]
@@ -426,18 +506,22 @@ class Rounds:
         self.stores[store] = StoreStatus("refused", last_ok=status.last_ok, reason=reason)
 
 
-def config_criteria(settings: Settings) -> dict[str, object]:
+def config_criteria(settings: Settings, chat_since_at: float | None = None) -> dict[str, object]:
     """Describe the operating mode for the ``config.audit`` event.
 
     Args:
         settings: The settings.
+        chat_since_at: When the chat period took effect, if known.
 
     Returns:
-        The periods (``None`` when off) and the schedule.
+        The periods (``None`` when off), when the chat period took effect,
+        the notice period and the schedule.
     """
     return {
         "audio_max_age_minutes": settings.audio_minutes,
         "chat_retention_days": settings.chat_days,
+        "chat_retention_since": None if chat_since_at is None else iso_utc(chat_since_at),
+        "notice_days": settings.notice_days,
         "interval_s": settings.interval_s,
         "chat_every_s": CHAT_EVERY_S,
         "chat_external_database": settings.external_database,
@@ -472,14 +556,20 @@ def serve(settings: Settings, audit_output: str | None, stop: threading.Event | 
     status = 0
     try:
         emitter.start()
-        emitter.emit("admin", "config.audit", SYSTEM, criteria=config_criteria(settings))
+        try:
+            since = chat_since(settings, time.time())
+        except (StateRefused, OSError):
+            since = None  # the first round refuses or retries chats, and says why
+        emitter.emit("admin", "config.audit", SYSTEM, criteria=config_criteria(settings, since))
         LOG.info(
             "audio caches: %s; chats: %s",
             "off" if settings.audio_minutes is None else f"deleted after {counted(settings.audio_minutes, 'minutes')}",
             "off"
             if settings.chat_days is None
-            else f"deleted {counted(settings.chat_days, 'days')} after their last change",
+            else f"deleted {counted(settings.chat_days, 'days')} after they were started",
         )
+        if settings.chat_days is None:
+            LOG.warning("chat retention is off: no chat is ever deleted (OPEN_WEBUI_CHAT_RETENTION_DAYS=off)")
         rounds = Rounds(emitter, settings, stop)
         while not stop.is_set():
             now = time.time()
@@ -626,7 +716,17 @@ def _dry_run_chats(settings: Settings, days: int | None, now: float, out: TextIO
         print("  refused: Open WebUI has its own DATABASE_URL, and only webui.db is swept", file=out)
         return False
     cutoff = int(now) - days * 86_400
-    print(f"  rule: chats not changed for {counted(days, 'days')} (last changed before {iso_utc(cutoff)})", file=out)
+    print(f"  rule: chats started more than {counted(days, 'days')} ago (before {iso_utc(cutoff)})", file=out)
+    try:
+        state = RetentionState.load(settings.state_file)
+    except StateRefused as exc:
+        print(f"  refused: {exc}", file=out)
+        return False
+    entry = state.stores.get(CHATS)
+    since = float(entry["since"]) if entry is not None and entry["days"] == days else now
+    start = since + settings.notice_days * 86_400
+    if now < start:
+        print(f"  deletion starts: {iso_utc(start)} (the notice period after the period took effect)", file=out)
     if not settings.database.is_file():
         print("  would delete: nothing (Open WebUI has not created its database yet)", file=out)
         return True
@@ -648,7 +748,7 @@ def _dry_run_chats(settings: Settings, days: int | None, now: float, out: TextIO
     if counts.chats:
         ages = ""
         if counts.oldest is not None and counts.newest is not None:
-            ages = f", {_ages(now, counts.newest, counts.oldest)}"
+            ages = ", " + _ages(now, counts.newest, counts.oldest).replace("last changed", "started", 1)
         print(
             f"  would delete: {counted(counts.chats, 'chats')} of {counted(counts.owners, 'accounts')}{ages}", file=out
         )
