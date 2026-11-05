@@ -80,7 +80,8 @@ VERIFIED_REVISIONS: Final = frozenset({"e42c8f710a36"})
 REQUIRED_COLUMNS: Final[Mapping[str, frozenset[str]]] = {
     "alembic_version": frozenset({"version_num"}),
     "chat": frozenset({"id", "user_id", "created_at", "updated_at", "meta"}),
-    "note": frozenset({"id"}),
+    "note": frozenset({"id", "user_id", "created_at"}),
+    "pinned_note": frozenset({"note_id"}),
     "chat_message": frozenset({"chat_id"}),
     "shared_chat": frozenset({"chat_id"}),
     "access_grant": frozenset({"resource_type", "resource_id"}),

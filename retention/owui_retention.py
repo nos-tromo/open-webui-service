@@ -60,6 +60,7 @@ from audio_caches import AUDIO_CACHES, CacheRefused, scan_cache, sweep_cache
 from audit_event import STREAM_MARKER, AuditEmitter, AuditWriteError, verify_chain
 from audit_runtime import open_audit_stream
 from chat_retention import ChatSweeper, SchemaRefused, open_database, preview, schema_problems
+from note_retention import NS, NoteSweeper, count_notes
 from retention_state import STATE_NAME, RetentionState, StateRefused, deletion_allowed
 from sweep_events import SERVICE, SYSTEM, counted, iso_utc
 
@@ -82,6 +83,10 @@ MAX_INTERVAL_S: Final = 86_400
 #: Chats are swept at start and then this often; retention in days needs no more.
 CHAT_EVERY_S: Final = 3_600
 CHATS: Final = "chats"
+NOTES: Final = "notes"
+#: The stores in Open WebUI's database, swept in this order at the chats'
+#: schedule and by the chats' period, each with its own grace.
+CONTENT_STORES: Final = (CHATS, NOTES)
 STATUS_VERSION: Final = 1
 
 _VERSION: Final = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,63}")
@@ -133,11 +138,12 @@ def parse_notice(value: str | None) -> int:
     return days
 
 
-def chat_since(settings: Settings, now: float) -> float | None:
-    """Return when the chat period took effect, recording ``now`` for a new or changed period.
+def period_since(settings: Settings, store: str, now: float) -> float | None:
+    """Return when a store's period took effect, recording ``now`` for a new or changed period.
 
     Args:
         settings: The settings.
+        store: One of :data:`CONTENT_STORES`.
         now: The current time.
 
     Returns:
@@ -151,7 +157,7 @@ def chat_since(settings: Settings, now: float) -> float | None:
     """
     if settings.chat_days is None or settings.external_database or not settings.database.is_file():
         return None
-    return RetentionState.load(settings.state_file).effective_since(CHATS, settings.chat_days, now)
+    return RetentionState.load(settings.state_file).effective_since(store, settings.chat_days, now)
 
 
 def parse_interval(value: str | None) -> int:
@@ -335,7 +341,7 @@ def stale_after(store: str, interval_s: int) -> float:
         Seconds: three rounds (at least a minute), plus the chat schedule for chats.
     """
     grace = max(3 * interval_s, 60)
-    return grace + CHAT_EVERY_S if store == CHATS else grace
+    return grace + CHAT_EVERY_S if store in CONTENT_STORES else grace
 
 
 def health(settings: Settings, now: float | None = None) -> int:
@@ -393,9 +399,10 @@ class Rounds:
         self._stop = stop
         audio = "off" if settings.audio_minutes is None else "pending"
         self.stores: dict[str, StoreStatus] = {cache.store: StoreStatus(audio) for cache in AUDIO_CACHES}
-        self.stores[CHATS] = StoreStatus("off" if settings.chat_days is None else "pending")
-        self._next_chats = 0.0
-        self._grace_logged = False
+        for store in CONTENT_STORES:
+            self.stores[store] = StoreStatus("off" if settings.chat_days is None else "pending")
+        self._next_content = 0.0
+        self._grace_logged: set[str] = set()
 
     def run(self, now: float) -> None:
         """Sweep every configured store once (chats only when due).
@@ -421,47 +428,71 @@ class Rounds:
                 else:
                     self._ok(cache.store, now)
         days = self._settings.chat_days
-        if days is None or now < self._next_chats or self._stop.is_set():
+        if days is None or now < self._next_content or self._stop.is_set():
             return
+        complete = True
+        for store in CONTENT_STORES:
+            if self._stop.is_set():
+                return
+            complete = self._sweep_content(store, days, now) and complete
+        self._next_content = now + CHAT_EVERY_S if complete else now
+
+    def _sweep_content(self, store: str, days: int, now: float) -> bool:
+        """Sweep one store of Open WebUI's database, once its period's notice has passed.
+
+        Args:
+            store: One of :data:`CONTENT_STORES`.
+            days: The period.
+            now: The round's time.
+
+        Returns:
+            Whether the store can wait for the next scheduled sweep: ``False``
+            when it was refused, failed or stopped at the batch cap, so it is
+            tried again next round (a refusal is recorded only once).
+
+        Raises:
+            AuditWriteError: If a record could not be written.
+            RuntimeError: If the emitter is closed.
+        """
         if self._settings.external_database:
-            self._refuse(CHATS, "external_database", "Open WebUI has its own DATABASE_URL; only webui.db is swept")
-            return
+            self._refuse(store, "external_database", "Open WebUI has its own DATABASE_URL; only webui.db is swept")
+            return False
         if not self._settings.database.is_file():
-            LOG.info("chats: Open WebUI has not created its database yet")
-            self._ok(CHATS, now)
-            self._next_chats = now + CHAT_EVERY_S
-            return
+            LOG.info("%s: Open WebUI has not created its database yet", store)
+            self._ok(store, now)
+            return True
         try:
-            since = chat_since(self._settings, now)
+            since = period_since(self._settings, store, now)
         except StateRefused as exc:
-            self._refuse(CHATS, "state", str(exc))
-            return
+            self._refuse(store, "state", str(exc))
+            return False
         except OSError as exc:
-            self._fail(CHATS, exc)
-            return
+            self._fail(store, exc)
+            return False
         notice = self._settings.notice_days
         if since is not None and not deletion_allowed(since=since, notice_days=notice, now=now):
-            if not self._grace_logged:
+            if store not in self._grace_logged:
                 LOG.info(
-                    "chats: the retention period takes effect on %s; until then no chat is deleted",
+                    "%s: the retention period takes effect on %s; until then nothing is deleted",
+                    store,
                     iso_utc(since + notice * 86_400),
                 )
-                self._grace_logged = True
-            self._ok(CHATS, now)
-            self._next_chats = now + CHAT_EVERY_S
-            return
-        sweeper = ChatSweeper(self._emitter, self._settings.database, days, stop=self._stop)
+                self._grace_logged.add(store)
+            self._ok(store, now)
+            return True
+        sweeper = (ChatSweeper if store == CHATS else NoteSweeper)(
+            self._emitter, self._settings.database, days, stop=self._stop
+        )
         try:
             result = sweeper.sweep(now)
         except SchemaRefused as exc:
-            self._refuse(CHATS, "schema", "; ".join(exc.problems))
+            self._refuse(store, "schema", "; ".join(exc.problems))
+            return False
         except sqlite3.Error as exc:
-            self._fail(CHATS, exc)
-        else:
-            if not result.database:
-                LOG.info("chats: Open WebUI has not created its database yet")
-            self._ok(CHATS, now)
-            self._next_chats = now + CHAT_EVERY_S if result.complete else now
+            self._fail(store, exc)
+            return False
+        self._ok(store, now)
+        return result.complete
 
     def _ok(self, store: str, now: float) -> None:
         """Note a completed sweep, and record the end of a refusal.
@@ -506,12 +537,12 @@ class Rounds:
         self.stores[store] = StoreStatus("refused", last_ok=status.last_ok, reason=reason)
 
 
-def config_criteria(settings: Settings, chat_since_at: float | None = None) -> dict[str, object]:
+def config_criteria(settings: Settings, since: Mapping[str, float | None] | None = None) -> dict[str, object]:
     """Describe the operating mode for the ``config.audit`` event.
 
     Args:
         settings: The settings.
-        chat_since_at: When the chat period took effect, if known.
+        since: When each content store's period took effect, where known.
 
     Returns:
         The periods (``None`` when off), when the chat period took effect,
@@ -520,12 +551,25 @@ def config_criteria(settings: Settings, chat_since_at: float | None = None) -> d
     return {
         "audio_max_age_minutes": settings.audio_minutes,
         "chat_retention_days": settings.chat_days,
-        "chat_retention_since": None if chat_since_at is None else iso_utc(chat_since_at),
+        "chat_retention_since": _since_text((since or {}).get(CHATS)),
+        "note_retention_since": _since_text((since or {}).get(NOTES)),
         "notice_days": settings.notice_days,
         "interval_s": settings.interval_s,
         "chat_every_s": CHAT_EVERY_S,
         "chat_external_database": settings.external_database,
     }
+
+
+def _since_text(moment: float | None) -> str | None:
+    """Format when a period took effect, for the config event.
+
+    Args:
+        moment: The time, if known.
+
+    Returns:
+        The UTC time, or ``None``.
+    """
+    return None if moment is None else iso_utc(moment)
 
 
 def serve(settings: Settings, audit_output: str | None, stop: threading.Event | None = None) -> int:
@@ -556,10 +600,12 @@ def serve(settings: Settings, audit_output: str | None, stop: threading.Event | 
     status = 0
     try:
         emitter.start()
-        try:
-            since = chat_since(settings, time.time())
-        except (StateRefused, OSError):
-            since = None  # the first round refuses or retries chats, and says why
+        since: dict[str, float | None] = {}
+        for store in CONTENT_STORES:
+            try:
+                since[store] = period_since(settings, store, time.time())
+            except (StateRefused, OSError):
+                since[store] = None  # the first round refuses or retries the store, and says why
         emitter.emit("admin", "config.audit", SYSTEM, criteria=config_criteria(settings, since))
         LOG.info(
             "audio caches: %s; chats: %s",
@@ -763,6 +809,43 @@ def _dry_run_chats(settings: Settings, days: int | None, now: float, out: TextIO
     return True
 
 
+def _dry_run_notes(settings: Settings, days: int | None, now: float, out: TextIO) -> bool:
+    """Report the notes (switched off; those written before are swept with the chats' period).
+
+    Args:
+        settings: The settings.
+        days: The period to evaluate; ``None`` is off.
+        now: The report's time.
+        out: Where the report goes.
+
+    Returns:
+        Whether the notes could be evaluated.
+    """
+    print(f"\nNotes ({DATABASE_NAME}; switched off, those written before)", file=out)
+    if days is None:
+        print("  retention: off; nothing is deleted", file=out)
+        return True
+    if settings.external_database or not settings.database.is_file():
+        print("  would delete: nothing (no webui.db to sweep)", file=out)
+        return not settings.external_database
+    cutoff = int(now) - days * 86_400
+    try:
+        conn = open_database(settings.database, readonly=True)
+        try:
+            if schema_problems(conn):
+                print("  refused: the database is not the schema this release was verified against", file=out)
+                return False
+            due, kept = count_notes(conn, cutoff * NS)
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        print(f"  cannot be evaluated: {exc}", file=out)
+        return False
+    print(f"  would delete: {counted(due, 'notes')}" if due else "  would delete: nothing", file=out)
+    print(f"  keeps: {counted(kept, 'notes')}", file=out)
+    return True
+
+
 def dry_run(
     settings: Settings,
     out: TextIO,
@@ -787,7 +870,8 @@ def dry_run(
     print(f"Open WebUI retention, dry run at {iso_utc(moment)}: nothing is deleted or recorded.", file=out)
     audio_ok = _dry_run_audio(settings, audio_minutes, moment, out)
     chats_ok = _dry_run_chats(settings, chat_days, moment, out)
-    return 0 if audio_ok and chats_ok else 1
+    notes_ok = _dry_run_notes(settings, chat_days, moment, out)
+    return 0 if audio_ok and chats_ok and notes_ok else 1
 
 
 def schema_check(database: Path, out: TextIO) -> int:

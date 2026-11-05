@@ -190,6 +190,12 @@ services:
       USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS: false
       USER_PERMISSIONS_FEATURES_MEMORIES: false
       ENABLE_MEMORIES: false
+      # No notes: they are user content no other route cleans up. The pinned
+      # image's notes router checks notes.enable on every route itself
+      # (routers/notes.py, check_notes_access); notes written before are
+      # deleted by the retention service with the chats' period.
+      ENABLE_NOTES: false
+      USER_PERMISSIONS_FEATURES_NOTES: false
       # No message ratings: rating an answer stores a full copy of the chat
       # with the rating (the feedback's `snapshot`). The copy outlives the
       # chat, and admins could read it through the evaluation routes whatever

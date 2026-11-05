@@ -148,6 +148,39 @@ class Store:
         )
         return note
 
+    def note_related(self, note_id: str, owner: str) -> None:
+        """Add one row of every kind that belongs to a note: a pin, a comment with a reaction, a notification, a grant.
+
+        Args:
+            note_id: The note.
+            owner: Its owner.
+        """
+        self.conn.execute(
+            "INSERT INTO pinned_note (id, user_id, note_id, created_at) VALUES (?, ?, ?, ?)",
+            (self._id("pin"), owner, note_id, NOW),
+        )
+        comment = self._id("comment")
+        self.conn.execute(
+            "INSERT INTO comment (id, user_id, resource_type, resource_id, content, created_at, updated_at) "
+            "VALUES (?, ?, 'note', ?, ?, ?, ?)",
+            (comment, owner, note_id, f"{SENTINEL} comment", NOW, NOW),
+        )
+        self.conn.execute(
+            "INSERT INTO comment_reaction (id, user_id, comment_id, name, created_at) VALUES (?, ?, ?, 'thumbsup', ?)",
+            (self._id("reaction"), BOB, comment, NOW),
+        )
+        self.conn.execute(
+            "INSERT INTO notification (id, user_id, event_type, event_key, actor_type, resource_type, resource_id, "
+            "object_type, object_id, data, created_at, updated_at) "
+            "VALUES (?, ?, 'comment', ?, 'user', 'note', ?, 'comment', ?, ?, ?, ?)",
+            (self._id("notif"), owner, self._id("key"), note_id, comment, json.dumps({"text": SENTINEL}), NOW, NOW),
+        )
+        self.conn.execute(
+            "INSERT INTO access_grant (id, resource_type, resource_id, principal_type, principal_id, permission, "
+            "created_at) VALUES (?, 'note', ?, 'user', ?, 'read', ?)",
+            (self._id("grant"), note_id, BOB, NOW),
+        )
+
     def message(self, chat_id: str, owner: str) -> str:
         """Add a message to a chat.
 

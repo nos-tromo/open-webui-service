@@ -124,7 +124,7 @@ class Volume(unittest.TestCase):
             version_file=version,
             status_file=self.tmp / "status.json",
         )
-        self.since(chats=(30, NOW - 400 * DAY))
+        self.since(chats=(30, NOW - 400 * DAY), notes=(30, NOW - 400 * DAY))
 
     def since(self, **stores: tuple[int, float]) -> None:
         """Record when stores' periods took effect, as an earlier run would have.
@@ -198,6 +198,7 @@ class ServeTest(Volume):
                 "audio_max_age_minutes": 60,
                 "chat_retention_days": 30,
                 "chat_retention_since": "2025-08-16T12:00:00Z",
+                "note_retention_since": "2025-08-16T12:00:00Z",
                 "notice_days": 30,
                 "interval_s": 10,
                 "chat_every_s": CHAT_EVERY_S,
@@ -234,6 +235,7 @@ class ServeTest(Volume):
         criteria = events(stream)[1]["criteria"]
         self.assertEqual(criteria["notice_days"], 30)
         self.assertEqual(criteria["chat_retention_since"], "2025-08-16T12:00:00Z")
+        self.assertEqual(criteria["note_retention_since"], "2025-08-16T12:00:00Z")
 
     def test_audio_off_leaves_the_caches(self) -> None:
         """OPEN_WEBUI_AUDIO_RETENTION_MINUTES=off keeps every recording."""
@@ -281,7 +283,7 @@ class RefusalTest(Volume):
         return Rounds(audit, settings, threading.Event()), stream
 
     def test_unverified_schema_refuses_chats_but_not_audio(self) -> None:
-        """An image bump stops chat retention, says so once, and the audio caches keep being swept."""
+        """An image bump stops chat and note retention, says so once each, and the audio caches keep being swept."""
         self.store.chat(ALICE, age_days=45)
         self.store.conn.execute("UPDATE alembic_version SET version_num = 'ffffffffffff'")
         recording = write_file(self.data / TRANSCRIPTIONS.relative, "rec-0001.webm", age_s=2 * 3600)
@@ -293,8 +295,10 @@ class RefusalTest(Volume):
         self.assertFalse(recording.exists())
         self.assertEqual(len(self.store.chat_ids()), 1)
         refused = [event for event in events(stream) if event["operation"] == "retention.refused"]
-        self.assertEqual(len(refused), 1)
-        self.assertEqual(refused[0]["criteria"], {"store": "chats", "reason": "schema"})
+        self.assertEqual(
+            [event["criteria"] for event in refused],
+            [{"store": "chats", "reason": "schema"}, {"store": "notes", "reason": "schema"}],
+        )
         self.assertEqual(rounds.stores["chats"].state, "refused")
         owui_retention.write_status(self.settings.status_file, owui_retention.Status(NOW + 60, 10, rounds.stores))
         with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
@@ -310,8 +314,8 @@ class RefusalTest(Volume):
             self.store.conn.execute("UPDATE alembic_version SET version_num = 'e42c8f710a36'")
             rounds.run(NOW + 60)
         operations = [event["operation"] for event in events(stream)]
-        self.assertEqual(operations.count("retention.refused"), 1)
-        self.assertEqual(operations.count("retention.resumed"), 1)
+        self.assertEqual(operations.count("retention.refused"), 2)
+        self.assertEqual(operations.count("retention.resumed"), 2)
         self.assertEqual(rounds.stores["chats"].state, "ok")
         self.assertEqual(chain_problems(stream), [])
 
@@ -393,6 +397,28 @@ class RefusalTest(Volume):
         self.assertEqual((rounds.stores["chats"].state, rounds.stores["chats"].reason), ("refused", "state"))
         refused = [event for event in events(stream) if event["operation"] == "retention.refused"]
         self.assertEqual(refused[0]["criteria"], {"store": "chats", "reason": "state"})
+
+    def test_old_notes_go_with_the_chats_period(self) -> None:
+        """Notes are swept in the same round as chats, by the chats' period, and recorded."""
+        old = self.store.note(ALICE, created_days=40)
+        young = self.store.note(ALICE, created_days=10)
+        rounds, stream = self.rounds(self.settings)
+        rounds.run(NOW)
+        remaining = {str(row[0]) for row in self.store.conn.execute("SELECT id FROM note")}
+        self.assertEqual(remaining, {young})
+        self.assertEqual([event["target"]["kind"] for event in deletions(stream)], ["note"])
+        self.assertNotIn(old, remaining)
+        self.assertEqual(rounds.stores["notes"].state, "ok")
+
+    def test_notes_have_their_own_grace(self) -> None:
+        """A notes period seen for the first time waits its notice, even when chats are past theirs."""
+        self.since(chats=(30, NOW - 400 * DAY))
+        old = self.store.note(ALICE, created_days=400)
+        rounds, _ = self.rounds(self.settings)
+        rounds.run(NOW)
+        self.assertEqual(self.store.count("note", "id = ?", (old,)), 1)
+        state = json.loads((self.data / STATE_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(state["stores"]["notes"], {"days": 30, "since": NOW})
 
     def test_chats_are_swept_hourly(self) -> None:
         """After a complete chat sweep the next one waits an hour; the audio caches do not."""
@@ -515,6 +541,17 @@ class DryRunTest(Volume):
         self.assertIn("rule: files older than 60 minutes", text)
         self.assertIn("Chats (webui.db)\n  retention: off; nothing is deleted", text)
         self.assertIn("make retention-dry-run CHAT_DAYS=<n>", text)
+
+    def test_dry_run_counts_notes(self) -> None:
+        """Notes are counted with the chats' period, and named by count only."""
+        self.store.note(ALICE, created_days=40)
+        self.store.note(BOB, created_days=50)
+        self.store.note(BOB, created_days=5)
+        status, text = self.report(audio_minutes=60, chat_days=30)
+        self.assertEqual(status, 0)
+        self.assertIn("Notes (webui.db; switched off, those written before)\n", text)
+        self.assertIn("  would delete: 2 notes\n  keeps: 1 note\n", text)
+        self.assertNotIn(SENTINEL, text)
 
     def test_dry_run_names_the_first_deletion_date(self) -> None:
         """Inside the grace period the report says from when chats are deleted."""
