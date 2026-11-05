@@ -22,7 +22,7 @@ jobs:
     # provenance; hadolint finds no Dockerfile and skips, since every image is
     # pulled, not built. No compose profiles are used here, so only
     # compose-files is passed.
-    uses: nos-tromo/.github/.github/workflows/infra-validation.yml@3bc75cce89f4eecaee404dd65eabce1f1d57e12b # v3.21
+    uses: nos-tromo/.github/.github/workflows/infra-validation.yml@2715bedabe594a449e411182393e68da59c791f3 # v3.22
     with:
       compose-files: '-f docker/compose.yaml -f docker/compose.override.yaml'
 
