@@ -274,7 +274,7 @@ services:
   # owner of everything on open-webui-data.
   ##########################################################
   retention:
-    image: docker.io/library/python:3.12.16-alpine3.24@sha256:e6dae589c1c05976188fd3bd019afd091445fc533ed2ea29001beddc7368a9c8
+    image: docker.io/library/python:3.15.0-alpine3.24@sha256:2699b90f4d562a22e2dd076c82f964032f64814204bff36d271a54ba4cc2c7e2
     user: "10001:10001"
     security_opt:
       - no-new-privileges:true
