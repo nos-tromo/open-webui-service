@@ -198,9 +198,11 @@ services:
       USER_PERMISSIONS_FEATURES_NOTES: false
       # The retention period, announced to everyone: chats are deleted that
       # many days after they were started (the retention service). The text
-      # takes the period from the retention service's variable; German via
-      # the banner's i18n (the UI's locale code).
-      WEBUI_BANNERS: '[{"id":"retention-period","type":"info","title":"","content":"Chats are deleted automatically ${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365} days after they were started.","dismissible":true,"timestamp":1793836800,"i18n":{"de-DE":{"content":"Chats werden ${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365} Tage nach ihrem Beginn automatisch gelöscht."}}}]'
+      # takes the period from the retention service's variable, and so does
+      # its id: the UI remembers a dismissed banner by id, so a changed
+      # period is announced again. German via the banner's i18n (the UI's
+      # locale code).
+      WEBUI_BANNERS: '[{"id":"retention-period-${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365}","type":"info","title":"","content":"Chats are deleted automatically ${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365} days after they were started.","dismissible":true,"timestamp":1793836800,"i18n":{"de-DE":{"content":"Chats werden ${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365} Tage nach ihrem Beginn automatisch gelöscht."}}}]'
       # No message ratings: rating an answer stores a full copy of the chat
       # with the rating (the feedback's `snapshot`). The copy outlives the
       # chat, and admins could read it through the evaluation routes whatever

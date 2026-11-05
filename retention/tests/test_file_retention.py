@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, override
 
 from audit_event import AuditWriteError
-from file_retention import FileSweep, FileSweeper
+from file_retention import FileSweep, FileSweeper, UploadsRefused
 
 from tests.synthetic import (
     ALICE,
@@ -155,6 +155,38 @@ class FileSweepTest(unittest.TestCase):
         self.assertTrue(target.exists())
         self.assertFalse((self.uploads / f"{file_id}_upload.txt").is_symlink())
         self.assertEqual(self.files(), set())
+
+    def test_an_upload_that_cannot_be_removed_is_kept_and_the_rest_go(self) -> None:
+        """A name in uploads/ that is a directory is not an upload: its row stays, logged; the others still go."""
+        stuck = self.store.upload(ALICE, created_days=400)
+        (self.uploads / f"{stuck}_upload.txt").mkdir()
+        later, later_path = self.upload(BOB, 400)
+        with self.assertLogs("retention", "WARNING"):
+            result, stream = self.sweep(365)
+        self.assertEqual((result.files, result.refused), (1, 1))
+        self.assertEqual(self.files(), {stuck})
+        self.assertFalse(later_path.exists())
+        self.assertEqual([event["outcome"] for event in deletions(stream)], ["ok"])
+        self.assertEqual(deletions(stream)[0]["target"]["ids"], [later])
+
+    def test_a_symlinked_uploads_directory_is_refused(self) -> None:
+        """uploads/ that is a link (say, to the data volume itself) refuses the store; nothing is deleted."""
+        shutil.rmtree(self.uploads)
+        self.uploads.symlink_to(self.data)
+        victim = self.store.upload(ALICE, created_days=400, path="/app/backend/data/uploads/webui.db")
+        with self.assertRaises(UploadsRefused):
+            self.sweep(365)
+        self.assertTrue(self.database.exists())
+        self.assertEqual(self.files(), {victim})
+
+    def test_the_record_says_derived_vectors_remain(self) -> None:
+        """What the image derived into its vector store is not deleted, and the record and the log say so."""
+        self.upload(ALICE, 400)
+        with self.assertLogs("retention", "WARNING") as logged:
+            _, stream = self.sweep(365)
+        (event,) = deletions(stream)
+        self.assertIs(event["criteria"]["vectors_left_in_store"], True)
+        self.assertTrue(any("Reset vector storage" in line for line in logged.output))
 
     def test_missing_file_on_disk_still_removes_the_row(self) -> None:
         """A row whose file is already gone is deleted all the same."""

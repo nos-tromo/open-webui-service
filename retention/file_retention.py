@@ -17,9 +17,15 @@ read from the pinned image's ``routers/files.py`` ``delete_file_by_id`` and
   log. A symbolic link is removed itself, never its target.
 
 What the image derived into its vector store (the ``file-<id>`` collection) is
-not reachable without Open WebUI's own client; the dry run says how many
-uploads had one, and *Reset vector storage* in Open WebUI's admin settings
-clears it (CLAUDE.md § Retention).
+not reachable without Open WebUI's own client: every record says so
+(``vectors_left_in_store``), the log names *Reset vector storage* in Open
+WebUI's admin settings, which clears it, and so does the dry run while uploads
+are due (CLAUDE.md § Retention).
+
+An ``uploads/`` that is a symbolic link, or not a directory, refuses the store
+(:class:`UploadsRefused`). A name in it that is neither a regular file nor a
+link (a directory, say) keeps its row, logged, so one odd entry never stops
+the others.
 
 A file's ``created_at`` is in seconds. The record names uploads by id only,
 never by file name, which can name a person. Each batch is recorded, then its
@@ -33,6 +39,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import stat
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -66,6 +73,10 @@ FILE_RELATED: Final = (
     Related("knowledge_links", "knowledge_file", "file_id IN ({ids})"),
     Related("grants", "access_grant", "resource_type = 'file' AND resource_id IN ({ids})"),
 )
+
+
+class UploadsRefused(Exception):
+    """``uploads/`` is not a plain directory on the data volume; nothing is deleted."""
 
 
 @dataclass
@@ -195,6 +206,8 @@ class FileSweeper:
             result.database = False
             return result
         cutoff = int(now) - self._days * 86_400
+        if self._uploads.is_symlink() or (self._uploads.exists() and not self._uploads.is_dir()):
+            raise UploadsRefused(f"{self._uploads.name} is a symbolic link or not a directory")
         conn = open_database(self._database, readonly=False, busy_timeout_s=self._busy_timeout_s)
         try:
             problems = schema_problems(conn)
@@ -206,6 +219,10 @@ class FileSweeper:
                 if name is None:
                     result.refused += 1
                     LOG.warning("uploads: %s records a path outside the upload directory; kept", file_id)
+                    continue
+                if not self._removable(name):
+                    result.refused += 1
+                    LOG.warning("uploads: the file of %s is not a regular file; kept", file_id)
                     continue
                 planned.setdefault(owner, []).append((file_id, name))
             for owner, uploads in sorted(planned.items(), key=lambda item: (item[0] is not None, item[0] or "")):
@@ -226,6 +243,10 @@ class FileSweeper:
         finally:
             conn.close()
         if result.files:
+            LOG.warning(
+                "uploads: what Open WebUI derived from the deleted uploads into its vector store stays until an "
+                "admin runs Reset vector storage (Admin settings, Documents)"
+            )
             LOG.info(
                 "uploads: deleted %s made more than %s ago (%s removed from disk), in %s",
                 counted(result.files, "uploads"),
@@ -234,6 +255,23 @@ class FileSweeper:
                 counted(result.batches, "batches"),
             )
         return result
+
+    def _removable(self, name: str) -> bool:
+        """Check that an upload's name in ``uploads/`` is absent, a regular file or a link.
+
+        Args:
+            name: Its base name.
+
+        Returns:
+            Whether the sweeper may remove it.
+        """
+        try:
+            mode = os.lstat(self._uploads / name).st_mode
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return stat.S_ISREG(mode) or stat.S_ISLNK(mode)
 
     def _remove_file(self, name: str) -> bool:
         """Remove one upload from the uploads directory, never following a link.
@@ -293,7 +331,8 @@ class FileSweeper:
                 files += conn.execute(
                     f"DELETE FROM file WHERE user_id IS ? AND id IN ({_placeholders(len(chunk))})", (owner, *chunk)
                 ).rowcount
-            record = emit_deletion(self._emitter, "upload", ids, {**rule, "owner": owner, **counts})
+            criteria = {**rule, "owner": owner, **counts, "vectors_left_in_store": True}
+            record = emit_deletion(self._emitter, "upload", ids, criteria)
         except BaseException:
             if conn.in_transaction:
                 conn.execute("ROLLBACK")

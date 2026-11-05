@@ -37,11 +37,11 @@ class ComposeDefaultsTest(unittest.TestCase):
         self.assertIsNotNone(match)
         assert match is not None
         raw = match.group(1)
-        self.assertEqual(raw.count("${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365}"), 2)
+        self.assertEqual(raw.count("${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365}"), 3)
         (banner,) = json.loads(raw.replace("${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365}", "365"))
         self.assertEqual(
             {key: banner[key] for key in ("id", "type", "dismissible")},
-            {"id": "retention-period", "type": "info", "dismissible": True},
+            {"id": "retention-period-365", "type": "info", "dismissible": True},
         )
         self.assertIsInstance(banner["timestamp"], int)
         self.assertEqual(banner["content"], "Chats are deleted automatically 365 days after they were started.")

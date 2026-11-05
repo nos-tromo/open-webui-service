@@ -161,9 +161,12 @@ no network and `open-webui-data` at `/data`.
   recorded path outside `/app/backend/data/uploads/` keeps its row, logged; a
   symlink is removed itself, never its target). The record names uploads by id
   only (`kind: upload`). What the image derived into its vector store
-  (`file-<id>` in Chroma) is beyond the stdlib sidecar: the dry run says when
-  there is some, and an admin clears it with *Reset vector storage* (Admin
-  settings, Documents). Verified against `models/files.py`, `routers/files.py`
+  (`file-<id>` in Chroma) is beyond the stdlib sidecar: every upload record
+  says so (`vectors_left_in_store: true`), the sweep logs a warning, the dry
+  run mentions it while uploads are due, and an admin clears it with *Reset
+  vector storage* (Admin settings, Documents). A `uploads/` that is a symlink
+  or not a directory refuses the store (`reason: not_a_directory`); a name in
+  it that is not a regular file or link keeps its row, logged. Verified against `models/files.py`, `routers/files.py`
   and `storage/provider.py`.
   Upstream's own delete (`models/chats.py`, `routers/chats.py`) leaves the share
   grants, the ratings and the file links behind; the declared cascades never

@@ -8,12 +8,18 @@ Open WebUI, on the same data volume and as the same user (CLAUDE.md
   transcripts, and text-to-speech output, deleted once they are older than
   ``OPEN_WEBUI_AUDIO_RETENTION_MINUTES`` (default 60; ``off`` stops it);
 * chats (``chat_retention.py``), deleted with everything that belongs only to
-  them once they have not changed for ``OPEN_WEBUI_CHAT_RETENTION_DAYS``
-  (unset or ``off`` by default: no chat is deleted).
+  them ``OPEN_WEBUI_CHAT_RETENTION_DAYS`` after they were started (default 365;
+  ``off`` keeps them, for development only), however recently they changed;
+* notes written before notes were switched off (``note_retention.py``) and
+  uploads from before the intake was closed (``file_retention.py``), by the
+  same period after they were created.
+
+A period that is new or changed deletes nothing for ``RETENTION_NOTICE_DAYS``
+(default 30) after it took effect, per store (``retention_state.py``).
 
 Every deletion is a ``delete`` / ``retention.sweep`` event of the federation's
 data-protection audit log (``audit_event.py``), written by the system actor
-before the files go and inside the transaction that deletes the chats. A
+before the files go and inside the transaction that deletes the rows. A
 record that cannot be written stops the service: nothing more is deleted until
 the container, restarted, can record again.
 
@@ -22,10 +28,11 @@ Subcommands:
 ``serve``
     The long-running service: one round at start, then every
     ``OPEN_WEBUI_RETENTION_INTERVAL_S`` seconds (default 300) for the audio
-    caches; chats at start and then hourly.
+    caches; chats, notes and uploads at start and then hourly.
 ``dry-run [--audio-minutes N|off] [--chat-days N|off]``
-    Report what the configured periods (or the ones given) would delete now:
-    counts and ages, never names or content. Records and deletes nothing.
+    Report what the configured periods (or the ones given) would delete now,
+    and for chats when deletion starts: counts and ages, never names or
+    content. Records and deletes nothing.
 ``schema [--database PATH]``
     Exit 0 when the database is the schema chat retention was verified against.
 ``health``
@@ -60,7 +67,7 @@ from audio_caches import AUDIO_CACHES, CacheRefused, scan_cache, sweep_cache
 from audit_event import STREAM_MARKER, AuditEmitter, AuditWriteError, verify_chain
 from audit_runtime import open_audit_stream
 from chat_retention import ChatSweeper, SchemaRefused, open_database, preview, schema_problems
-from file_retention import FileSweeper, count_uploads
+from file_retention import FileSweeper, UploadsRefused, count_uploads
 from note_retention import NS, NoteSweeper, count_notes
 from retention_state import STATE_NAME, RetentionState, StateRefused, deletion_allowed
 from sweep_events import SERVICE, SYSTEM, counted, iso_utc
@@ -495,6 +502,9 @@ class Rounds:
             result = sweeper.sweep(now)
         except SchemaRefused as exc:
             self._refuse(store, "schema", "; ".join(exc.problems))
+            return False
+        except UploadsRefused as exc:
+            self._refuse(store, "not_a_directory", str(exc))
             return False
         except (sqlite3.Error, OSError) as exc:
             self._fail(store, exc)
