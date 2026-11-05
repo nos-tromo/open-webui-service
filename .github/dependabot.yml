@@ -15,7 +15,10 @@ updates:
   # run the image. (The docker ecosystem reads only Dockerfiles, of which this
   # repo has none, so it failed every run.) data-plane omits this: its DB
   # images are pull-only and deliberately not auto-bumped; here the pinned
-  # image is the whole point of the repo.
+  # image is the whole point of the repo. An Open WebUI bump that changes its
+  # database schema fails the retention-schema CI job until chat retention is
+  # verified against it (CLAUDE.md § Retention). The same entry also bumps
+  # edge-guard's nginx and the retention sidecar's python image.
   - package-ecosystem: docker-compose
     directory: "/docker"
     schedule:

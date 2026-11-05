@@ -6,6 +6,9 @@
 # `inference-net` and speaks the OpenAI API to an OpenAI-compatible endpoint
 # on that network (the LiteLLM proxy from vllm-service). All state lives in
 # the external `open-webui-data` volume, created out-of-band by `make volumes`.
+# The `retention` sidecar deletes from it what Open WebUI never deletes and
+# records every deletion in the data-protection audit log (CLAUDE.md
+# § Retention).
 #
 # Requires a .env at the repo root (compose is invoked with --env-file .env).
 # Copy it from the example first:  cp .env.example .env
@@ -31,7 +34,7 @@ OPEN_WEBUI_VOLUME := open-webui-data
 COMPOSE     := docker compose --env-file .env -f docker/compose.yaml
 COMPOSE_DEV := docker compose --env-file .env -f docker/compose.yaml -f docker/compose.override.yaml
 
-.PHONY: help network volumes pull bundle bundle-dev up up-dev stop down restart logs ps health nuke
+.PHONY: help network volumes pull bundle bundle-dev up up-dev stop down restart logs ps health retention-dry-run nuke
 
 help:
 	@echo "open-webui-service — Open WebUI chat UI on inference-net."
@@ -43,9 +46,9 @@ help:
 	@echo "  make network    create the external $(INFERENCE_NET) and $(EDGE_NET) if missing"
 	@echo "  make volumes    create the external $(OPEN_WEBUI_VOLUME) if missing"
 	@echo "  make pull       pull the pinned upstream image"
-	@echo "  make bundle     save the pinned image of the latest release tag as an airgap .tar.gz"
+	@echo "  make bundle     save the pinned images of the latest release tag as an airgap .tar.gz"
 	@echo "  make bundle-dev same, from the current working tree (date+sha version)"
-	@echo "  make up         start open-webui (production shape, no host ports)"
+	@echo "  make up         start open-webui and its sidecars (production shape, no host ports)"
 	@echo "  make up-dev     like 'up', but publishes the UI port on the host"
 	@echo "  make stop       stop the container without removing it"
 	@echo "  make down       stop + remove the container (data volume preserved)"
@@ -56,6 +59,11 @@ help:
 	@echo "  make ps         container status"
 	@echo "  make health     status + uptime"
 	@echo "  make logs       tail open-webui logs"
+	@echo
+	@echo "Retention (the retention service must be up):"
+	@echo "  make retention-dry-run [CHAT_DAYS=n] [AUDIO_MINUTES=n]"
+	@echo "                  what the configured periods (or these) would delete now;"
+	@echo "                  counts and ages only, nothing is deleted or recorded"
 	@echo
 	@echo "Note: OPENAI_API_BASE_URL must resolve on $(INFERENCE_NET);"
 	@echo "the vllm-service LiteLLM proxy is reachable there as 'vllm-router'."
@@ -79,12 +87,12 @@ volumes:
 	  || (echo ">> creating external volume $(OPEN_WEBUI_VOLUME)" \
 	      && docker volume create $(OPEN_WEBUI_VOLUME))
 
-# Pull the pinned upstream image.
+# Pull the pinned images.
 pull:
 	$(COMPOSE) pull
 
-# Save the pinned image as a versioned airgap tarball for transfer to an offline
-# host. Delegates to scripts/bundle_images.sh, which re-tags the image
+# Save the pinned images as a versioned airgap tarball for transfer to an offline
+# host. Delegates to scripts/bundle_images.sh, which re-tags each image
 # (name:tag@digest -> name:tag) before `docker save` via the stack-shared,
 # CI-drift-checked scripts/bundle-lib.sh — so the digest-pinned `image:` in
 # compose.yaml resolves after `docker load` (a plain `docker save` of the
@@ -128,6 +136,16 @@ ps:
 
 health:
 	@$(COMPOSE) ps --format '{{.Name}}\t{{.State}}\t{{.Status}}'
+	@echo
+	@$(COMPOSE) exec -T retention python /app/owui_retention.py health && echo "retention: sweeping as configured"
+
+# Dry run of the retention sidecar: what OPEN_WEBUI_AUDIO_RETENTION_MINUTES and
+# OPEN_WEBUI_CHAT_RETENTION_DAYS would delete now, or the periods given here,
+# e.g. `make retention-dry-run CHAT_DAYS=90` before turning chat retention on.
+# Counts and ages only; it reads what it counts and changes nothing.
+retention-dry-run:
+	$(COMPOSE) exec -T retention python /app/owui_retention.py dry-run \
+	  $(if $(AUDIO_MINUTES),--audio-minutes '$(AUDIO_MINUTES)') $(if $(CHAT_DAYS),--chat-days '$(CHAT_DAYS)')
 
 # Destructive: stop + remove the container, then delete the external data
 # volume (every chat, user, setting, upload, and RAG vector). Interactive

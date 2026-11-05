@@ -260,6 +260,66 @@ services:
     depends_on:
       - open-webui
 
+  ##########################################################
+  # retention — deletes what Open WebUI itself never deletes
+  # (CLAUDE.md § Retention): speech-to-text recordings with
+  # their transcripts and text-to-speech output after
+  # OPEN_WEBUI_AUDIO_RETENTION_MINUTES (default 60), and,
+  # only when OPEN_WEBUI_CHAT_RETENTION_DAYS is set, chats
+  # unchanged for that many days. Every deletion is a
+  # `delete` event of the data-protection audit log in this
+  # container's log; a deletion that cannot be recorded does
+  # not happen. Stdlib Python mounted read-only; nothing is
+  # installed. No network. It runs as Open WebUI's uid, the
+  # owner of everything on open-webui-data.
+  ##########################################################
+  retention:
+    image: docker.io/library/python:3.12.16-alpine3.24@sha256:e6dae589c1c05976188fd3bd019afd091445fc533ed2ea29001beddc7368a9c8
+    user: "10001:10001"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    network_mode: none
+    tmpfs:
+      - /tmp:size=1m
+    logging:
+      driver: "local"
+      options:
+        max-size: "50m"
+        max-file: "5"
+        compress: "true"
+    entrypoint: ["python", "/app/owui_retention.py"]
+    command: ["serve"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      AUDIT_OUTPUT: container
+      # Minutes after which a recording, its transcript or a text-to-speech
+      # file is deleted; `off` keeps them (as upstream does).
+      OPEN_WEBUI_AUDIO_RETENTION_MINUTES: ${OPEN_WEBUI_AUDIO_RETENTION_MINUTES:-60}
+      # Days without a change after which a chat is deleted. Unset (the
+      # default) or `off`: no chat is ever deleted.
+      OPEN_WEBUI_CHAT_RETENTION_DAYS: ${OPEN_WEBUI_CHAT_RETENTION_DAYS:-}
+      OPEN_WEBUI_RETENTION_INTERVAL_S: ${OPEN_WEBUI_RETENTION_INTERVAL_S:-300}
+      # Only whether DATABASE_URL is set, never its value: Open WebUI then
+      # keeps its chats outside webui.db, and chat retention refuses.
+      RETENTION_EXTERNAL_DATABASE: ${DATABASE_URL:+true}
+    volumes:
+      - ../retention:/app:ro
+      - ../VERSION:/etc/open-webui-service/VERSION:ro
+      - open-webui-data:/data
+    depends_on:
+      volume-permissions:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "/app/owui_retention.py", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
 volumes:
   # External so app teardown (even `docker compose down -v`) can never delete
   # user data. Created out-of-band by `make volumes`; removed only by `make

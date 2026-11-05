@@ -15,11 +15,66 @@ concurrency:
 
 jobs:
   validate:
-    # Org-wide reusable infra workflow, pinned to the latest major tag (@v2).
-    # For this repo it runs yamllint + `docker compose config`; the hadolint and
-    # shellcheck jobs find no matching files and skip, since there is no
-    # Dockerfile (the upstream image is pinned, not built) and no scripts/. No
-    # compose profiles are used here, so only compose-files is passed.
-    uses: nos-tromo/.github/.github/workflows/infra-validation.yml@44032ac756bd7700ba19fc65e141a5c2f8992416 # v3.20
+    # Org-wide reusable infra workflow, pinned to a commit (v3.21). For this
+    # repo it runs yamllint, `docker compose config`, shellcheck on scripts/,
+    # the drift checks of the vendored files (scripts/bundle-lib.sh and the
+    # audit library under retention/), the action pins and the image
+    # provenance; hadolint finds no Dockerfile and skips, since every image is
+    # pulled, not built. No compose profiles are used here, so only
+    # compose-files is passed.
+    uses: nos-tromo/.github/.github/workflows/infra-validation.yml@3bc75cce89f4eecaee404dd65eabce1f1d57e12b # v3.21
     with:
       compose-files: '-f docker/compose.yaml -f docker/compose.override.yaml'
+
+  retention-tests:
+    # The retention sidecar (retention/) against synthetic data, in databases
+    # built from the pinned Open WebUI image's schema: stdlib unittest, nothing
+    # installed. Once on the runner, once in the pinned python image as the
+    # container runs it (read-only, Open WebUI's uid, no network).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: unittest (runner python)
+        run: python3 -m unittest discover -s retention/tests -t retention -v
+      - name: unittest (pinned image, read-only, uid 10001, no network)
+        run: |
+          docker run --rm --read-only --tmpfs /tmp --user 10001:10001 --network none -e PYTHONDONTWRITEBYTECODE=1 \
+            -v "$PWD/retention:/app:ro" \
+            docker.io/library/python:3.12.16-alpine3.24@sha256:e6dae589c1c05976188fd3bd019afd091445fc533ed2ea29001beddc7368a9c8 \
+            python -m unittest discover -s /app/tests -t /app
+
+  retention-schema:
+    # Chat retention deletes only in the schema it was verified against
+    # (CLAUDE.md § Retention). Migrate a database with the pinned Open WebUI
+    # image's own migrations, then check that the tests' fixture is that
+    # schema and that the sidecar accepts it. The comparison is canonical
+    # (tests/schema_dump.py): the migrations write some tables' constraints
+    # and indexes in an order that varies from run to run. An image bump that
+    # changes the schema therefore fails here, before it merges.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: migrate a database with the pinned Open WebUI image
+        run: |
+          image=$(grep -m1 -oE 'ghcr\.io/open-webui/open-webui:[^[:space:]]+' docker/compose.yaml)
+          echo "image: $image"
+          docker volume create retention-schema
+          docker run --rm --network none -e OFFLINE_MODE=true -e HF_HUB_OFFLINE=1 \
+            -e WEBUI_SECRET_KEY=ci-schema-check-only -v retention-schema:/app/backend/data \
+            --entrypoint python "$image" -c "import open_webui.config"
+      - name: the tests' fixture is that schema
+        run: |
+          image=docker.io/library/python:3.12.16-alpine3.24@sha256:e6dae589c1c05976188fd3bd019afd091445fc533ed2ea29001beddc7368a9c8
+          docker run --rm --read-only --network none -e PYTHONDONTWRITEBYTECODE=1 \
+            -v retention-schema:/data:ro -v "$PWD/retention:/app:ro" \
+            "$image" python /app/tests/schema_dump.py --canonical /data/webui.db > "$RUNNER_TEMP/migrated.txt"
+          docker run --rm --read-only --network none -e PYTHONDONTWRITEBYTECODE=1 -v "$PWD/retention:/app:ro" \
+            "$image" python /app/tests/schema_dump.py --canonical --from-sql /app/tests/fixtures/webui-schema.sql \
+            > "$RUNNER_TEMP/fixture.txt"
+          diff -u "$RUNNER_TEMP/fixture.txt" "$RUNNER_TEMP/migrated.txt"
+      - name: the sidecar accepts it
+        run: |
+          docker run --rm --read-only --network none -e PYTHONDONTWRITEBYTECODE=1 \
+            -v retention-schema:/data:ro -v "$PWD/retention:/app:ro" \
+            docker.io/library/python:3.12.16-alpine3.24@sha256:e6dae589c1c05976188fd3bd019afd091445fc533ed2ea29001beddc7368a9c8 \
+            python /app/owui_retention.py schema --database /data/webui.db
