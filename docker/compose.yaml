@@ -286,9 +286,9 @@ services:
   # their transcripts and text-to-speech output after
   # OPEN_WEBUI_AUDIO_RETENTION_MINUTES (default 60), and
   # chats OPEN_WEBUI_CHAT_RETENTION_DAYS (default 365) after
-  # they were started. A period that is new or changed
-  # deletes nothing for RETENTION_NOTICE_DAYS (default 30)
-  # after it took effect. Every deletion is a
+  # they were started. A new period deletes nothing for
+  # RETENTION_NOTICE_DAYS (default 30) after it took effect;
+  # a changed one never postpones what was already due. Every deletion is a
   # `delete` event of the data-protection audit log in this
   # container's log; a deletion that cannot be recorded does
   # not happen. Stdlib Python mounted read-only; nothing is
@@ -324,8 +324,8 @@ services:
       # recently it changed; empty means the default. `off` keeps every chat
       # (development only; logged as a warning and stated in the audit log).
       OPEN_WEBUI_CHAT_RETENTION_DAYS: ${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365}
-      # Days a period that is new or changed deletes nothing, so what is
-      # already older than it is announced first.
+      # Days a new period deletes nothing, so what is already older than
+      # it is announced first; a changed one never postpones what was due.
       RETENTION_NOTICE_DAYS: ${RETENTION_NOTICE_DAYS:-30}
       OPEN_WEBUI_RETENTION_INTERVAL_S: ${OPEN_WEBUI_RETENTION_INTERVAL_S:-300}
       # Only whether DATABASE_URL is set, never its value: Open WebUI then
