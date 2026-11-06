@@ -115,10 +115,19 @@ class RetentionStateTest(unittest.TestCase):
         self.assertEqual(self.entry()["grace_until"], NOW + 25 * DAY)
         self.assertIsNone(self.rule(365, NOW + 2 * DAY, notice=1).sweep_days(NOW + 2 * DAY))
 
-    def test_a_state_dated_in_the_future_restarts_the_notice(self) -> None:
-        """A state ahead of the clock never blocks deletion for long."""
+    def test_a_state_dated_in_the_future_is_capped_at_now(self) -> None:
+        """A state ahead of the clock never blocks deletion for longer than one notice."""
         self.path.write_text(json.dumps({"stores": {"chats": {"days": 365, "since": NOW + 100 * DAY}}}), encoding="utf-8")
-        self.assertEqual(self.rule(365, NOW).grace_until, NOW + 30 * DAY)
+        rule = self.rule(365, NOW)
+        self.assertEqual((rule.since, rule.grace_until), (NOW, NOW + 30 * DAY))
+
+    def test_a_clock_stepped_back_keeps_what_is_due(self) -> None:
+        """A clock set back a few seconds after a change never restarts the notice."""
+        self.rule(30, NOW - 400 * DAY)
+        self.rule(365, NOW)
+        rule = self.rule(365, NOW - 5)
+        self.assertEqual(rule.grace_until, NOW)
+        self.assertEqual(rule.sweep_days(NOW), 365)
 
     def test_forget_drops_the_store(self) -> None:
         """Switching retention off forgets the store, so switching on again gives a fresh notice."""

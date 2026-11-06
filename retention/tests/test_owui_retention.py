@@ -199,8 +199,14 @@ class ServeTest(Volume):
                 "audio_max_age_minutes": 60,
                 "chat_retention_days": 30,
                 "chat_retention_since": "2025-08-16T12:00:00Z",
+                "chat_retention_grace_until": "2025-09-15T12:00:00Z",
+                "chat_retention_in_force_days": None,
                 "note_retention_since": "2025-08-16T12:00:00Z",
+                "note_retention_grace_until": "2025-09-15T12:00:00Z",
+                "note_retention_in_force_days": None,
                 "file_retention_since": "2025-08-16T12:00:00Z",
+                "file_retention_grace_until": "2025-09-15T12:00:00Z",
+                "file_retention_in_force_days": None,
                 "notice_days": 30,
                 "interval_s": 10,
                 "chat_every_s": CHAT_EVERY_S,
@@ -232,6 +238,25 @@ class ServeTest(Volume):
         self.assertTrue(any("chat retention is off" in line for line in logged.output))
         state = json.loads((self.data / STATE_NAME).read_text(encoding="utf-8"))
         self.assertEqual(state["stores"], {})
+
+    def test_config_states_each_stores_notice_end_and_the_period_in_force(self) -> None:
+        """The chain says when deletion starts and which period still deletes meanwhile."""
+        body = {
+            "stores": {
+                "chats": {
+                    "days": 30,
+                    "since": NOW - 5 * DAY,
+                    "grace_until": NOW + 25 * DAY,
+                    "in_force_days": 365,
+                    "in_force_grace": NOW - 400 * DAY,
+                }
+            }
+        }
+        (self.data / STATE_NAME).write_text(json.dumps(body), encoding="utf-8")
+        _, stream = self.serve_one_round(self.settings)
+        criteria = events(stream)[1]["criteria"]
+        self.assertEqual(criteria["chat_retention_grace_until"], "2026-10-15T12:00:00Z")
+        self.assertEqual(criteria["chat_retention_in_force_days"], 365)
 
     def test_config_states_the_notice_and_when_chats_took_effect(self) -> None:
         """The chain's config event carries the notice days and the time chat retention took effect."""
@@ -613,6 +638,24 @@ class DryRunTest(Volume):
         uploads = text.split("Uploads (")[1]
         self.assertIn("deletion starts: 2026-10-10T12:00:00Z", notes)
         self.assertIn("deletion starts: 2026-10-10T12:00:00Z", uploads)
+
+    def test_the_report_says_when_the_period_in_force_starts_deleting(self) -> None:
+        """During a shortened period's notice, the date the period in force deletes from is named too."""
+        body = {
+            "stores": {
+                "chats": {
+                    "days": 30,
+                    "since": NOW - 5 * DAY,
+                    "grace_until": NOW + 25 * DAY,
+                    "in_force_days": 365,
+                    "in_force_grace": NOW + 5 * DAY,
+                }
+            }
+        }
+        (self.data / STATE_NAME).write_text(json.dumps(body), encoding="utf-8")
+        _, text = self.report(audio_minutes=60, chat_days=30)
+        chats = text.split("Chats (")[1].split("Notes (")[0]
+        self.assertIn("older than 365 days goes from 2026-09-25T12:00:00Z", chats)
 
     def test_an_upload_outside_the_upload_directory_is_counted_as_kept(self) -> None:
         """The sweep never deletes a path outside uploads/, so the report does not count it as going."""

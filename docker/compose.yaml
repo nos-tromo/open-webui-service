@@ -288,7 +288,7 @@ services:
   # chats OPEN_WEBUI_CHAT_RETENTION_DAYS (default 365) after
   # they were started. A new period deletes nothing for
   # RETENTION_NOTICE_DAYS (default 30) after it took effect;
-  # a changed one never postpones what was already due. Every deletion is a
+  # a changed one never deletes sooner than announced. Every deletion is a
   # `delete` event of the data-protection audit log in this
   # container's log; a deletion that cannot be recorded does
   # not happen. Stdlib Python mounted read-only; nothing is
@@ -325,7 +325,7 @@ services:
       # (development only; logged as a warning and stated in the audit log).
       OPEN_WEBUI_CHAT_RETENTION_DAYS: ${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365}
       # Days a new period deletes nothing, so what is already older than
-      # it is announced first; a changed one never postpones what was due.
+      # it is announced first; a changed one never deletes sooner than announced.
       RETENTION_NOTICE_DAYS: ${RETENTION_NOTICE_DAYS:-30}
       OPEN_WEBUI_RETENTION_INTERVAL_S: ${OPEN_WEBUI_RETENTION_INTERVAL_S:-300}
       # Only whether DATABASE_URL is set, never its value: Open WebUI then

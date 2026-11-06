@@ -14,8 +14,9 @@ Open WebUI, on the same data volume and as the same user (CLAUDE.md
   uploads from before the intake was closed (``file_retention.py``), by the
   same period after they were created.
 
-A period that is new or changed deletes nothing for ``RETENTION_NOTICE_DAYS``
-(default 30) after it took effect, per store (``retention_state.py``).
+A period that is new deletes nothing for ``RETENTION_NOTICE_DAYS`` (default
+30) after it took effect, and a changed one never deletes sooner than
+announced, per store (``retention_state.py``).
 
 Every deletion is a ``delete`` / ``retention.sweep`` event of the federation's
 data-protection audit log (``audit_event.py``), written by the system actor
@@ -221,8 +222,8 @@ class Settings:
     Attributes:
         audio_minutes: The audio caches' period; ``None`` is off.
         chat_days: The chats' period; ``None`` is off (development only).
-        notice_days: How long a period that took effect, or changed, deletes
-            nothing (``RETENTION_NOTICE_DAYS``).
+        notice_days: How long a new period deletes nothing, and a shortened
+            one spares what it makes due sooner (``RETENTION_NOTICE_DAYS``).
         interval_s: Seconds between rounds.
         external_database: Open WebUI was given its own ``DATABASE_URL``, so
             ``webui.db`` is not where its chats are.
@@ -517,11 +518,20 @@ class Rounds:
                 self._refuse(store, "schema", "; ".join(problems))
                 return False
             if store not in self._grace_logged:
-                LOG.info(
-                    "%s: the retention period takes effect on %s; until then nothing is deleted",
-                    store,
-                    iso_utc(rule.grace_until),
-                )
+                if rule.in_force_days is not None and rule.in_force_grace is not None:
+                    LOG.info(
+                        "%s: the retention period takes effect on %s; until then older than %s goes from %s",
+                        store,
+                        iso_utc(rule.grace_until),
+                        counted(max(rule.days, rule.in_force_days), "days"),
+                        iso_utc(rule.in_force_grace),
+                    )
+                else:
+                    LOG.info(
+                        "%s: the retention period takes effect on %s; until then nothing is deleted",
+                        store,
+                        iso_utc(rule.grace_until),
+                    )
                 self._grace_logged.add(store)
             self._ok(store, now)
             return True
@@ -592,28 +602,36 @@ class Rounds:
         self.stores[store] = StoreStatus("refused", last_ok=status.last_ok, reason=reason)
 
 
-def config_criteria(settings: Settings, since: Mapping[str, float | None] | None = None) -> dict[str, object]:
+def config_criteria(settings: Settings, rules: Mapping[str, StoreRule | None] | None = None) -> dict[str, object]:
     """Describe the operating mode for the ``config.audit`` event.
 
     Args:
         settings: The settings.
-        since: When each content store's period took effect, where known.
+        rules: Each content store's rule, where known.
 
     Returns:
-        The periods (``None`` when off), when the chat period took effect,
-        the notice period and the schedule.
+        The periods (``None`` when off); per store when its period took
+        effect, when its notice ends and the period in force meanwhile; the
+        notice period and the schedule.
     """
-    return {
+    criteria: dict[str, object] = {
         "audio_max_age_minutes": settings.audio_minutes,
         "chat_retention_days": settings.chat_days,
-        "chat_retention_since": _since_text((since or {}).get(CHATS)),
-        "note_retention_since": _since_text((since or {}).get(NOTES)),
-        "file_retention_since": _since_text((since or {}).get(FILES)),
-        "notice_days": settings.notice_days,
-        "interval_s": settings.interval_s,
-        "chat_every_s": CHAT_EVERY_S,
-        "chat_external_database": settings.external_database,
     }
+    for store, prefix in ((CHATS, "chat"), (NOTES, "note"), (FILES, "file")):
+        rule = (rules or {}).get(store)
+        criteria[f"{prefix}_retention_since"] = _since_text(None if rule is None else rule.since)
+        criteria[f"{prefix}_retention_grace_until"] = _since_text(None if rule is None else rule.grace_until)
+        criteria[f"{prefix}_retention_in_force_days"] = None if rule is None else rule.in_force_days
+    criteria.update(
+        {
+            "notice_days": settings.notice_days,
+            "interval_s": settings.interval_s,
+            "chat_every_s": CHAT_EVERY_S,
+            "chat_external_database": settings.external_database,
+        }
+    )
+    return criteria
 
 
 def _since_text(moment: float | None) -> str | None:
@@ -656,16 +674,15 @@ def serve(settings: Settings, audit_output: str | None, stop: threading.Event | 
     status = 0
     try:
         emitter.start()
-        since: dict[str, float | None] = {}
+        rules: dict[str, StoreRule | None] = {}
         if settings.chat_days is None:
             forget_content_periods(settings)
         for store in CONTENT_STORES:
             try:
-                rule = store_rule(settings, store, time.time())
+                rules[store] = store_rule(settings, store, time.time())
             except (StateRefused, OSError):
-                rule = None  # the first round refuses or retries the store, and says why
-            since[store] = None if rule is None else rule.since
-        emitter.emit("admin", "config.audit", SYSTEM, criteria=config_criteria(settings, since))
+                rules[store] = None  # the first round refuses or retries the store, and says why
+        emitter.emit("admin", "config.audit", SYSTEM, criteria=config_criteria(settings, rules))
         LOG.info(
             "audio caches: %s; chats: %s",
             "off" if settings.audio_minutes is None else f"deleted after {counted(settings.audio_minutes, 'minutes')}",
@@ -880,9 +897,12 @@ def _deletion_start(settings: Settings, store: str, days: int, now: float, out: 
         return False
     if now < rule.grace_until:
         print(f"  deletion starts: {iso_utc(rule.grace_until)} (the notice period after the period took effect)", file=out)
-        meanwhile = rule.sweep_days(now)
-        if meanwhile is not None:
-            print(f"  until then: older than {counted(meanwhile, 'days')} still goes (the period in force)", file=out)
+        if rule.in_force_days is not None and rule.in_force_grace is not None:
+            older = counted(max(rule.days, rule.in_force_days), "days")
+            if now >= rule.in_force_grace:
+                print(f"  until then: older than {older} still goes (the period in force)", file=out)
+            else:
+                print(f"  until then: older than {older} goes from {iso_utc(rule.in_force_grace)}", file=out)
     return True
 
 

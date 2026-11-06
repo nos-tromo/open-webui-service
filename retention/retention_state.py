@@ -3,9 +3,9 @@
 A period that is switched on deletes nothing for the notice period after it
 took effect (``RETENTION_NOTICE_DAYS``), so everything that is already older
 than the period when it ships gets the notice first. A changed period never
-postpones what the period in force already made due, and never deletes sooner
-than announced: a longer one applies at once (within a running first notice,
-at its end); a shorter one gives the notice only to what it makes due sooner,
+deletes sooner than announced: a longer one applies at once (within a running
+first notice, at its end; also to what was due under the shorter one but not
+yet deleted); a shorter one gives the notice only to what it makes due sooner,
 never ending before a notice already running, while the rule in force still
 deletes meanwhile. Changing the notice alone moves nothing. The state has to
 survive restarts, so it is kept on Open WebUI's data volume, next to its
@@ -23,6 +23,7 @@ be read, does not hold that shape, or holds impossible values refuses
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 from dataclasses import dataclass, field
@@ -31,6 +32,9 @@ from typing import Final
 
 #: The file's name on the data volume.
 STATE_NAME: Final = ".retention-state.json"
+
+
+LOG = logging.getLogger("retention")
 
 
 class StateRefused(Exception):
@@ -165,7 +169,7 @@ class RetentionState:
         """
         fresh = StoreRule(now, period_days, now + notice_days * 86_400)
         entry = self.stores.get(store)
-        if entry is None or float(entry["since"]) > now:
+        if entry is None:
             rule = fresh
         else:
             since, recorded = float(entry["since"]), int(entry["days"])
@@ -173,6 +177,13 @@ class RetentionState:
             grace = since + notice_days * 86_400 if legacy else float(entry["grace_until"])
             in_force = entry.get("in_force_days")
             in_force_grace = entry.get("in_force_grace")
+            dated_ahead = since > now
+            if dated_ahead:
+                # A clock set back: keep the rule, never longer than one notice from now.
+                LOG.warning("%s: the retention state is dated in the future; its dates are capped at now", store)
+                since, grace = now, min(grace, fresh.grace_until)
+                if in_force_grace is not None:
+                    in_force_grace = min(float(in_force_grace), grace)
             if recorded == period_days:
                 rule = StoreRule(
                     since,
@@ -181,7 +192,7 @@ class RetentionState:
                     None if in_force is None else int(in_force),
                     None if in_force_grace is None else float(in_force_grace),
                 )
-                if not (legacy and record):
+                if not ((legacy or dated_ahead) and record):
                     return rule
             else:
                 if now >= grace or in_force is None or in_force_grace is None:

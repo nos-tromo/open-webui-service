@@ -166,18 +166,17 @@ federation's data-protection audit log:
   intake was closed, by the same period after they were created.
 
 A period that is new deletes nothing for `RETENTION_NOTICE_DAYS` (default 30)
-after it took effect. A changed period never postpones what the period in force
-already made due, and never deletes sooner than announced: a longer one applies
-at once (within a running first notice, at its end), a shorter one gives the
-notice only to what it makes due sooner and never ends a notice already
-running. Changing `RETENTION_NOTICE_DAYS` alone moves nothing. Switching
-retention off forgets when the periods took effect, so switching it on again
-gives a fresh notice. See what it would delete:
-`make retention-dry-run` (or `CHAT_DAYS=180` for another period) prints counts,
-ages and the date deletion starts, never names or content, and deletes and
-records nothing. What belongs to a chat, how a
-deletion is recorded, and why a new Open WebUI image stops chat retention
-until it is verified: [`CLAUDE.md`](./CLAUDE.md) § Retention.
+after it took effect. A changed period never deletes sooner than announced: a
+longer one applies at once (within a running first notice, at its end; also to
+what was due under the shorter one but not yet deleted), a shorter one gives the
+notice only to what it makes due sooner and never ends a notice already running.
+Changing `RETENTION_NOTICE_DAYS` alone moves nothing. Switching retention off
+forgets when the periods took effect, so switching it on again gives a fresh
+notice. See what it would delete: `make retention-dry-run` (or `CHAT_DAYS=180`
+for another period) prints counts, ages and the date deletion starts, never
+names or content, and deletes and records nothing. What belongs to a chat, how a
+deletion is recorded, and why a new Open WebUI image stops chat retention until
+it is verified: [`CLAUDE.md`](./CLAUDE.md) § Retention.
 
 ## Updating the image
 
