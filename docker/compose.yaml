@@ -82,7 +82,7 @@ services:
       PORT: "8081"
       # This app ships NO bundled inference provider. It reaches inference
       # ONLY over the OpenAI-compatible API below — exactly like the other
-      # consumers (docint, chorus, Nextext, translator). The endpoint is
+      # consumers (docint, Nextext, translator). The endpoint is
       # swappable by env: vllm-service's LiteLLM proxy (alias 'vllm-router'),
       # or any other OpenAI-compatible server (e.g. Ollama's /v1).
       OPENAI_API_BASE_URL: ${OPENAI_API_BASE_URL:-http://vllm-router:4000/v1}
