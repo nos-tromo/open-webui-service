@@ -28,7 +28,7 @@ A thin **deployment wrapper** for [Open WebUI](https://github.com/open-webui/ope
 
 ## Architecture: where this fits
 
-This is one of several sibling deployments in the `infra/` workspace (`vllm-service`, `translator`, `docint`, `chorus`, `Nextext`, `afd-pipeline-main`, `data-plane`). They communicate over a single shared Docker bridge network, **`inference-net`**, which is declared `external: true` everywhere and created out-of-band (`docker network create inference-net`; siblings do this idempotently via their `make network` target).
+This is one of several sibling deployments in the `infra/` workspace (`vllm-service`, `translator`, `docint`, `Nextext`, `afd-pipeline-main`, `data-plane`). They communicate over a single shared Docker bridge network, **`inference-net`**, which is declared `external: true` everywhere and created out-of-band (`docker network create inference-net`; siblings do this idempotently via their `make network` target).
 
 Open WebUI is the chat UI. It speaks the OpenAI API and is pointed at an OpenAI-compatible endpoint on `inference-net`. In this stack that endpoint is the **LiteLLM proxy provided by `vllm-service`** (service `router`, port `4000`, network alias `vllm-router`), which fans out to vLLM model backends (chat, embed, rerank, clip, asr, diarize, vad, gliner). So the dependency chain is:
 
@@ -87,8 +87,8 @@ healthcheck follows `PORT`, so it probes `8081` inside the container.
 Open WebUI has no base-path / sub-path support (confirmed empirically —
 its built-in frontend serves root-absolute asset paths, e.g. `/_app/...`,
 `/static/...`, with no `WEBUI_BASE_URL`-style rewrite hook in
-`open_webui/env.py`), so unlike the path-prefixed apps (`/chorus`,
-`/docint`, …) it cannot live under `/webui` on the shared `:443` site. The
+`open_webui/env.py`), so unlike the path-prefixed apps (`/docint`,
+`/nextext`, …) it cannot live under `/webui` on the shared `:443` site. The
 gateway instead gives it a **dedicated port**, `:8443` (see `edge-plane`'s
 `caddy/Caddyfile`); the shared site's `/webui` route just redirects there.
 Reachable at `https://<EDGE_HOST>:8443/` once both stacks are up.
