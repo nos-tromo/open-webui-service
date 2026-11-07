@@ -14,8 +14,9 @@ Open WebUI, on the same data volume and as the same user (CLAUDE.md
   uploads from before the intake was closed (``file_retention.py``), by the
   same period after they were created.
 
-A period that is new or changed deletes nothing for ``RETENTION_NOTICE_DAYS``
-(default 30) after it took effect, per store (``retention_state.py``).
+A period that is new deletes nothing for ``RETENTION_NOTICE_DAYS`` (default
+30) after it took effect, and a changed one never deletes sooner than
+announced, per store (``retention_state.py``).
 
 Every deletion is a ``delete`` / ``retention.sweep`` event of the federation's
 data-protection audit log (``audit_event.py``), written by the system actor
@@ -69,7 +70,7 @@ from audit_runtime import open_audit_stream
 from chat_retention import ChatSweeper, SchemaRefused, open_database, preview, schema_problems
 from file_retention import FileSweeper, UploadsRefused, count_uploads
 from note_retention import NS, NoteSweeper, count_notes
-from retention_state import STATE_NAME, RetentionState, StateRefused, deletion_allowed
+from retention_state import STATE_NAME, RetentionState, StateRefused, StoreRule
 from sweep_events import SERVICE, SYSTEM, counted, iso_utc
 
 LOG = logging.getLogger("retention")
@@ -140,16 +141,22 @@ def parse_notice(value: str | None) -> int:
     Raises:
         ValueError: If it is not a whole number from 1 to :data:`MAX_NOTICE_DAYS`.
     """
-    days = parse_period(
-        value, name="RETENTION_NOTICE_DAYS", unit="days", default=DEFAULT_NOTICE_DAYS, maximum=MAX_NOTICE_DAYS
-    )
+    message = f"RETENTION_NOTICE_DAYS must be whole days from 1 to {MAX_NOTICE_DAYS}"
+    if value is not None and value.strip().lower() == "off":
+        raise ValueError(message)
+    try:
+        days = parse_period(
+            value, name="RETENTION_NOTICE_DAYS", unit="days", default=DEFAULT_NOTICE_DAYS, maximum=MAX_NOTICE_DAYS
+        )
+    except ValueError:
+        raise ValueError(message) from None
     if days is None:
-        raise ValueError(f"RETENTION_NOTICE_DAYS must be whole days from 1 to {MAX_NOTICE_DAYS}, or off")
+        raise ValueError(message)
     return days
 
 
-def period_since(settings: Settings, store: str, now: float) -> float | None:
-    """Return when a store's period took effect, recording ``now`` for a new or changed period.
+def store_rule(settings: Settings, store: str, now: float) -> StoreRule | None:
+    """Return a store's retention rule, recording a new, changed or upgraded period.
 
     Args:
         settings: The settings.
@@ -157,7 +164,7 @@ def period_since(settings: Settings, store: str, now: float) -> float | None:
         now: The current time.
 
     Returns:
-        The time, or ``None`` when chat retention cannot run: it is off, Open
+        The rule, or ``None`` when chat retention cannot run: it is off, Open
         WebUI keeps its own database, or has not created ``webui.db`` yet (no
         period is recorded then).
 
@@ -167,7 +174,23 @@ def period_since(settings: Settings, store: str, now: float) -> float | None:
     """
     if settings.chat_days is None or settings.external_database or not settings.database.is_file():
         return None
-    return RetentionState.load(settings.state_file).effective_since(store, settings.chat_days, now)
+    return RetentionState.load(settings.state_file).rule(store, settings.chat_days, settings.notice_days, now)
+
+
+def forget_content_periods(settings: Settings) -> None:
+    """Forget when the content stores' periods took effect (retention off), so switching on gives a fresh notice.
+
+    Args:
+        settings: The settings.
+    """
+    if settings.external_database or not settings.state_file.exists():
+        return
+    try:
+        state = RetentionState.load(settings.state_file)
+        for store in CONTENT_STORES:
+            state.forget(store)
+    except (StateRefused, OSError) as exc:
+        LOG.warning("cannot forget when the retention periods took effect (%s)", exc)
 
 
 def parse_interval(value: str | None) -> int:
@@ -199,8 +222,8 @@ class Settings:
     Attributes:
         audio_minutes: The audio caches' period; ``None`` is off.
         chat_days: The chats' period; ``None`` is off (development only).
-        notice_days: How long a period that took effect, or changed, deletes
-            nothing (``RETENTION_NOTICE_DAYS``).
+        notice_days: How long a new period deletes nothing, and a shortened
+            one spares what it makes due sooner (``RETENTION_NOTICE_DAYS``).
         interval_s: Seconds between rounds.
         external_database: Open WebUI was given its own ``DATABASE_URL``, so
             ``webui.db`` is not where its chats are.
@@ -292,8 +315,8 @@ class StoreStatus:
             attempt failed; it is retried every round) or ``refused`` (it will
             not run until fixed).
         last_ok: When it last ran to the end, in seconds since the epoch.
-        reason: Why it is refused: ``schema``, ``external_database`` or
-            ``not_a_directory``.
+        reason: Why it is refused: ``schema``, ``external_database``,
+            ``not_a_directory`` or ``state`` (the state file cannot be used).
     """
 
     state: str
@@ -472,24 +495,48 @@ class Rounds:
             self._ok(store, now)
             return True
         try:
-            since = period_since(self._settings, store, now)
+            rule = store_rule(self._settings, store, now)
         except StateRefused as exc:
             self._refuse(store, "state", str(exc))
             return False
         except OSError as exc:
             self._fail(store, exc)
             return False
-        notice = self._settings.notice_days
-        if since is not None and not deletion_allowed(since=since, notice_days=notice, now=now):
+        if rule is not None and rule.sweep_days(now) is None:
+            # Nothing may go yet, but a schema the release was not verified
+            # against is refused now, not when the notice ends.
+            try:
+                conn = open_database(self._settings.database, readonly=True)
+                try:
+                    problems = schema_problems(conn)
+                finally:
+                    conn.close()
+            except sqlite3.Error as exc:
+                self._fail(store, exc)
+                return False
+            if problems:
+                self._refuse(store, "schema", "; ".join(problems))
+                return False
             if store not in self._grace_logged:
-                LOG.info(
-                    "%s: the retention period takes effect on %s; until then nothing is deleted",
-                    store,
-                    iso_utc(since + notice * 86_400),
-                )
+                if rule.in_force_days is not None and rule.in_force_grace is not None:
+                    LOG.info(
+                        "%s: the retention period takes effect on %s; until then older than %s goes from %s",
+                        store,
+                        iso_utc(rule.grace_until),
+                        counted(max(rule.days, rule.in_force_days), "days"),
+                        iso_utc(rule.in_force_grace),
+                    )
+                else:
+                    LOG.info(
+                        "%s: the retention period takes effect on %s; until then nothing is deleted",
+                        store,
+                        iso_utc(rule.grace_until),
+                    )
                 self._grace_logged.add(store)
             self._ok(store, now)
             return True
+        if rule is not None:
+            days = rule.sweep_days(now) or days
         database = self._settings.database
         sweeper: ChatSweeper | NoteSweeper | FileSweeper
         if store == CHATS:
@@ -555,28 +602,36 @@ class Rounds:
         self.stores[store] = StoreStatus("refused", last_ok=status.last_ok, reason=reason)
 
 
-def config_criteria(settings: Settings, since: Mapping[str, float | None] | None = None) -> dict[str, object]:
+def config_criteria(settings: Settings, rules: Mapping[str, StoreRule | None] | None = None) -> dict[str, object]:
     """Describe the operating mode for the ``config.audit`` event.
 
     Args:
         settings: The settings.
-        since: When each content store's period took effect, where known.
+        rules: Each content store's rule, where known.
 
     Returns:
-        The periods (``None`` when off), when the chat period took effect,
-        the notice period and the schedule.
+        The periods (``None`` when off); per store when its period took
+        effect, when its notice ends and the period in force meanwhile; the
+        notice period and the schedule.
     """
-    return {
+    criteria: dict[str, object] = {
         "audio_max_age_minutes": settings.audio_minutes,
         "chat_retention_days": settings.chat_days,
-        "chat_retention_since": _since_text((since or {}).get(CHATS)),
-        "note_retention_since": _since_text((since or {}).get(NOTES)),
-        "file_retention_since": _since_text((since or {}).get(FILES)),
-        "notice_days": settings.notice_days,
-        "interval_s": settings.interval_s,
-        "chat_every_s": CHAT_EVERY_S,
-        "chat_external_database": settings.external_database,
     }
+    for store, prefix in ((CHATS, "chat"), (NOTES, "note"), (FILES, "file")):
+        rule = (rules or {}).get(store)
+        criteria[f"{prefix}_retention_since"] = _since_text(None if rule is None else rule.since)
+        criteria[f"{prefix}_retention_grace_until"] = _since_text(None if rule is None else rule.grace_until)
+        criteria[f"{prefix}_retention_in_force_days"] = None if rule is None else rule.in_force_days
+    criteria.update(
+        {
+            "notice_days": settings.notice_days,
+            "interval_s": settings.interval_s,
+            "chat_every_s": CHAT_EVERY_S,
+            "chat_external_database": settings.external_database,
+        }
+    )
+    return criteria
 
 
 def _since_text(moment: float | None) -> str | None:
@@ -619,13 +674,15 @@ def serve(settings: Settings, audit_output: str | None, stop: threading.Event | 
     status = 0
     try:
         emitter.start()
-        since: dict[str, float | None] = {}
+        rules: dict[str, StoreRule | None] = {}
+        if settings.chat_days is None:
+            forget_content_periods(settings)
         for store in CONTENT_STORES:
             try:
-                since[store] = period_since(settings, store, time.time())
+                rules[store] = store_rule(settings, store, time.time())
             except (StateRefused, OSError):
-                since[store] = None  # the first round refuses or retries the store, and says why
-        emitter.emit("admin", "config.audit", SYSTEM, criteria=config_criteria(settings, since))
+                rules[store] = None  # the first round refuses or retries the store, and says why
+        emitter.emit("admin", "config.audit", SYSTEM, criteria=config_criteria(settings, rules))
         LOG.info(
             "audio caches: %s; chats: %s",
             "off" if settings.audio_minutes is None else f"deleted after {counted(settings.audio_minutes, 'minutes')}",
@@ -782,16 +839,8 @@ def _dry_run_chats(settings: Settings, days: int | None, now: float, out: TextIO
         return False
     cutoff = int(now) - days * 86_400
     print(f"  rule: chats started more than {counted(days, 'days')} ago (before {iso_utc(cutoff)})", file=out)
-    try:
-        state = RetentionState.load(settings.state_file)
-    except StateRefused as exc:
-        print(f"  refused: {exc}", file=out)
+    if not _deletion_start(settings, CHATS, days, now, out):
         return False
-    entry = state.stores.get(CHATS)
-    since = float(entry["since"]) if entry is not None and entry["days"] == days else now
-    start = since + settings.notice_days * 86_400
-    if now < start:
-        print(f"  deletion starts: {iso_utc(start)} (the notice period after the period took effect)", file=out)
     if not settings.database.is_file():
         print("  would delete: nothing (Open WebUI has not created its database yet)", file=out)
         return True
@@ -828,6 +877,35 @@ def _dry_run_chats(settings: Settings, days: int | None, now: float, out: TextIO
     return True
 
 
+def _deletion_start(settings: Settings, store: str, days: int, now: float, out: TextIO) -> bool:
+    """Say from when a store is deleted, while its notice runs (reading the state, never writing it).
+
+    Args:
+        settings: The settings.
+        store: One of :data:`CONTENT_STORES`.
+        days: The period evaluated.
+        now: The report's time.
+        out: Where the report goes.
+
+    Returns:
+        Whether the state could be read.
+    """
+    try:
+        rule = RetentionState.load(settings.state_file).rule(store, days, settings.notice_days, now, record=False)
+    except StateRefused as exc:
+        print(f"  refused: {exc}", file=out)
+        return False
+    if now < rule.grace_until:
+        print(f"  deletion starts: {iso_utc(rule.grace_until)} (the notice period after the period took effect)", file=out)
+        if rule.in_force_days is not None and rule.in_force_grace is not None:
+            older = counted(max(rule.days, rule.in_force_days), "days")
+            if now >= rule.in_force_grace:
+                print(f"  until then: older than {older} still goes (the period in force)", file=out)
+            else:
+                print(f"  until then: older than {older} goes from {iso_utc(rule.in_force_grace)}", file=out)
+    return True
+
+
 def _dry_run_notes(settings: Settings, days: int | None, now: float, out: TextIO) -> bool:
     """Report the notes (switched off; those written before are swept with the chats' period).
 
@@ -847,6 +925,8 @@ def _dry_run_notes(settings: Settings, days: int | None, now: float, out: TextIO
     if settings.external_database or not settings.database.is_file():
         print("  would delete: nothing (no webui.db to sweep)", file=out)
         return not settings.external_database
+    if not _deletion_start(settings, NOTES, days, now, out):
+        return False
     cutoff = int(now) - days * 86_400
     try:
         conn = open_database(settings.database, readonly=True)
@@ -884,6 +964,8 @@ def _dry_run_uploads(settings: Settings, days: int | None, now: float, out: Text
     if settings.external_database or not settings.database.is_file():
         print("  would delete: nothing (no webui.db to sweep)", file=out)
         return not settings.external_database
+    if not _deletion_start(settings, FILES, days, now, out):
+        return False
     cutoff = int(now) - days * 86_400
     try:
         conn = open_database(settings.database, readonly=True)

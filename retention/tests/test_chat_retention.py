@@ -246,6 +246,12 @@ class SweepTest(Workspace):
         undated = self.store.chat(ALICE, age_days=None, created_days=None)
         self.sweep(30)
         self.assertEqual(self.store.chat_ids(), {undated})
+        conn = open_database(self.database, readonly=True)
+        try:
+            counts = preview(conn, int(NOW) - 30 * DAY)
+        finally:
+            conn.close()
+        self.assertEqual((counts.chats, counts.kept), (0, 1))
 
     def test_note_chat_without_its_note_is_due(self) -> None:
         """A note's chat goes with its note: once the note is gone it is due, whatever its age."""

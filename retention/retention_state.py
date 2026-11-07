@@ -1,20 +1,29 @@
 """When each store's retention period took effect on this host.
 
-A period that is switched on, or changed, deletes nothing for the notice period
-after it took effect (``RETENTION_NOTICE_DAYS``), so everything that is already
-older than the period when it ships gets the notice first. That moment has to
+A period that is switched on deletes nothing for the notice period after it
+took effect (``RETENTION_NOTICE_DAYS``), so everything that is already older
+than the period when it ships gets the notice first. A changed period never
+deletes sooner than announced: a longer one applies at once (within a running
+first notice, at its end; also to what was due under the shorter one but not
+yet deleted); a shorter one gives the notice only to what it makes due sooner,
+never ending before a notice already running, while the rule in force still
+deletes meanwhile. Changing the notice alone moves nothing. The state has to
 survive restarts, so it is kept on Open WebUI's data volume, next to its
 database, as ``.retention-state.json``::
 
-    {"stores": {"chats": {"days": 365, "since": 1793...}}}
+    {"stores": {"chats": {"days": 30, "since": 1793..., "grace_until": 1796...,
+                          "in_force_days": 365, "in_force_grace": 1790...}}}
 
-A file that cannot be read or does not hold that shape refuses
+An entry of the release before (``days`` and ``since`` only) is read as a
+notice that started at ``since`` and rewritten with its end. A file that cannot
+be read, does not hold that shape, or holds impossible values refuses
 (:class:`StateRefused`) instead of restarting the grace period. Stdlib only.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 from dataclasses import dataclass, field
@@ -25,22 +34,69 @@ from typing import Final
 STATE_NAME: Final = ".retention-state.json"
 
 
+LOG = logging.getLogger("retention")
+
+
 class StateRefused(Exception):
     """The state file exists but cannot be used; nothing is swept."""
 
 
-def deletion_allowed(*, since: float, notice_days: int, now: float) -> bool:
-    """Decide whether the notice period after a period took effect has passed.
+#: The longest notice an entry may record, in days (as ``RETENTION_NOTICE_DAYS``).
+MAX_ENTRY_NOTICE_DAYS: Final = 365
 
-    Args:
-        since: When the period took effect, seconds since the epoch.
-        notice_days: The notice period.
-        now: The time of the decision.
 
-    Returns:
-        Whether deletion may start.
+def _number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _days(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+@dataclass(frozen=True)
+class StoreRule:
+    """A store's retention rule as it stands.
+
+    Attributes:
+        since: When the period took effect.
+        days: The period.
+        grace_until: Until when the period does not delete on its own.
+        in_force_days: The period in force before a change, deleting meanwhile.
+        in_force_grace: Since when that period deletes.
     """
-    return now >= since + notice_days * 86_400
+
+    since: float
+    days: int
+    grace_until: float
+    in_force_days: int | None = None
+    in_force_grace: float | None = None
+
+    def sweep_days(self, now: float) -> int | None:
+        """Return the age past which a sweep at ``now`` deletes, if it may delete at all.
+
+        Args:
+            now: The sweep's time.
+
+        Returns:
+            The period after the notice; meanwhile the longer of it and the
+            period in force once that one deletes; ``None`` while nothing may go.
+        """
+        if now >= self.grace_until:
+            return self.days
+        if self.in_force_days is not None and self.in_force_grace is not None and now >= self.in_force_grace:
+            return max(self.days, self.in_force_days)
+        return None
+
+    def entry(self) -> dict[str, float | int]:
+        """Return the state file's entry for this rule.
+
+        Returns:
+            The entry.
+        """
+        out: dict[str, float | int] = {"days": self.days, "since": self.since, "grace_until": self.grace_until}
+        if self.in_force_days is not None and self.in_force_grace is not None:
+            out.update(in_force_days=self.in_force_days, in_force_grace=self.in_force_grace)
+        return out
 
 
 @dataclass
@@ -77,37 +133,92 @@ class RetentionState:
         if not isinstance(stores, dict):
             raise StateRefused(f"{path} holds no stores")
         for name, entry in stores.items():
-            ok = (
-                isinstance(entry, dict)
-                and isinstance(entry.get("days"), int)
-                and not isinstance(entry.get("days"), bool)
-                and isinstance(entry.get("since"), (int, float))
-                and not isinstance(entry.get("since"), bool)
-            )
-            if not ok:
+            if not (isinstance(entry, dict) and _days(entry.get("days")) and _number(entry.get("since"))):
                 raise StateRefused(f"{path}: the entry of {name!r} is not a period and a time")
+            since = float(entry["since"])
+            grace = entry.get("grace_until", since)
+            if not _number(grace) or not since <= float(grace) <= since + MAX_ENTRY_NOTICE_DAYS * 86_400:
+                raise StateRefused(f"{path}: the entry of {name!r} holds an impossible notice end")
+            has_days, has_grace = "in_force_days" in entry, "in_force_grace" in entry
+            if has_days != has_grace or (
+                has_days
+                and not (
+                    _days(entry["in_force_days"])
+                    and _number(entry["in_force_grace"])
+                    and float(entry["in_force_grace"]) <= float(grace)
+                )
+            ):
+                raise StateRefused(f"{path}: the entry of {name!r} holds an impossible period in force")
         return cls(path, dict(stores))
 
-    def effective_since(self, store: str, period_days: int, now: float) -> float:
-        """Return when a store's period took effect, recording ``now`` for a new or changed period.
+    def rule(self, store: str, period_days: int, notice_days: int, now: float, *, record: bool = True) -> StoreRule:
+        """Return a store's rule, moving to ``period_days`` when it is new or changed.
 
         Args:
             store: ``chats``, ``notes`` or ``files``.
-            period_days: The period in force.
+            period_days: The period configured now.
+            notice_days: The notice configured now.
             now: The current time.
+            record: Write a new, changed or upgraded entry (the dry run only reads).
 
         Returns:
-            When that period took effect.
+            The rule.
 
         Raises:
-            OSError: If a new entry cannot be written.
+            OSError: If an entry cannot be written.
         """
+        fresh = StoreRule(now, period_days, now + notice_days * 86_400)
         entry = self.stores.get(store)
-        if entry is not None and entry["days"] == period_days:
-            return float(entry["since"])
-        self.stores[store] = {"days": period_days, "since": now}
-        self._write()
-        return now
+        if entry is None:
+            rule = fresh
+        else:
+            since, recorded = float(entry["since"]), int(entry["days"])
+            legacy = "grace_until" not in entry
+            grace = since + notice_days * 86_400 if legacy else float(entry["grace_until"])
+            in_force = entry.get("in_force_days")
+            in_force_grace = entry.get("in_force_grace")
+            dated_ahead = since > now
+            if dated_ahead:
+                # A clock set back: keep the rule, never longer than one notice from now.
+                LOG.warning("%s: the retention state is dated in the future; its dates are capped at now", store)
+                since, grace = now, min(grace, fresh.grace_until)
+                if in_force_grace is not None:
+                    in_force_grace = min(float(in_force_grace), grace)
+            if recorded == period_days:
+                rule = StoreRule(
+                    since,
+                    recorded,
+                    grace,
+                    None if in_force is None else int(in_force),
+                    None if in_force_grace is None else float(in_force_grace),
+                )
+                if not ((legacy or dated_ahead) and record):
+                    return rule
+            else:
+                if now >= grace or in_force is None or in_force_grace is None:
+                    effective, effective_grace = recorded, grace
+                else:
+                    effective, effective_grace = max(int(in_force), recorded), float(in_force_grace)
+                if period_days >= effective:
+                    rule = StoreRule(now, period_days, max(now, effective_grace))
+                else:
+                    running = grace if grace > now else now
+                    rule = StoreRule(
+                        now, period_days, max(fresh.grace_until, running), effective, effective_grace
+                    )
+        if record:
+            self.stores[store] = rule.entry()
+            self._write()
+        return rule
+
+    def forget(self, store: str) -> None:
+        """Forget a store's entry (retention switched off), so switching on gives a fresh notice.
+
+        Raises:
+            OSError: If the state cannot be written.
+        """
+        if self.stores.pop(store, None) is not None:
+            self._write()
 
     def _write(self) -> None:
         """Write the state atomically, readable by its owner only."""

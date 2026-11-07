@@ -122,7 +122,7 @@ mandatory before any target.
 | `OPEN_WEBUI_FORWARD_JWT_SECRET` | Signs the per-call user token the router records; same value as vllm-service's `AUDIT_OPENWEBUI_JWT_SECRET`. Empty ⇒ no user information is forwarded. | empty |
 | `OPEN_WEBUI_AUDIO_RETENTION_MINUTES` | Minutes after which speech-to-text recordings, their transcripts and text-to-speech output are deleted; `off` keeps them. | `60` |
 | `OPEN_WEBUI_CHAT_RETENTION_DAYS` | Days after a chat was started (a note or upload created) at which it is deleted, with everything that belongs only to it. `off` keeps them (development only). | `365` |
-| `RETENTION_NOTICE_DAYS` | Days a new or changed period deletes nothing after it took effect. | `30` |
+| `RETENTION_NOTICE_DAYS` | Days a new period deletes nothing after it took effect; a shortened one spares what it makes due sooner for as long. Changing it alone moves no date. | `30` |
 | `OPEN_WEBUI_RETENTION_INTERVAL_S` | Seconds between two sweeps of the audio caches (chats: at start, then hourly). | `300` |
 
 Model ids must name models the endpoint actually serves, and the same model
@@ -165,13 +165,18 @@ federation's data-protection audit log:
 - notes (switched off; those written before) and uploads from before the
   intake was closed, by the same period after they were created.
 
-A period that is new or changed deletes nothing for `RETENTION_NOTICE_DAYS`
-(default 30) after it took effect. See what it would delete:
-`make retention-dry-run` (or `CHAT_DAYS=180` for another period) prints counts,
-ages and the date deletion starts, never names or content, and deletes and
-records nothing. What belongs to a chat, how a
-deletion is recorded, and why a new Open WebUI image stops chat retention
-until it is verified: [`CLAUDE.md`](./CLAUDE.md) § Retention.
+A period that is new deletes nothing for `RETENTION_NOTICE_DAYS` (default 30)
+after it took effect. A changed period never deletes sooner than announced: a
+longer one applies at once (within a running first notice, at its end; also to
+what was due under the shorter one but not yet deleted), a shorter one gives the
+notice only to what it makes due sooner and never ends a notice already running.
+Changing `RETENTION_NOTICE_DAYS` alone moves nothing. Switching retention off
+forgets when the periods took effect, so switching it on again gives a fresh
+notice. See what it would delete: `make retention-dry-run` (or `CHAT_DAYS=180`
+for another period) prints counts, ages and the date deletion starts, never
+names or content, and deletes and records nothing. What belongs to a chat, how a
+deletion is recorded, and why a new Open WebUI image stops chat retention until
+it is verified: [`CLAUDE.md`](./CLAUDE.md) § Retention.
 
 ## Updating the image
 

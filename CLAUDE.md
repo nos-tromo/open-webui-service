@@ -123,12 +123,19 @@ no network and `open-webui-data` at `/data`.
   (compose default 365; `off` only for development, logged as a warning and
   stated in the chain's `config.audit`) is how long chats, notes and uploads
   are kept after they were *created*. Using or continuing one never extends
-  it; there is no extension of any kind. A period that is new on the host, or
-  changed, deletes nothing for `RETENTION_NOTICE_DAYS` (default 30) after it
-  took effect, recorded per store (`chats`, `notes`, `files`) in
-  `/data/.retention-state.json` (mode 0600; a file that cannot be read or
-  parsed refuses that store, `reason: state`). The `config.audit` event states
-  the period, the notice and when each store's period took effect. A banner
+  it; there is no extension of any kind. A period that is new on the host
+  deletes nothing for `RETENTION_NOTICE_DAYS` (default 30) after it took
+  effect. A changed one never deletes sooner than announced (`StoreRule` in
+  `retention_state.py`: a
+  longer period applies at once, a shorter one gives the notice only to what it
+  makes due sooner); changing the notice alone moves nothing, and `off` forgets
+  the stores. Recorded per store (`chats`, `notes`, `files`) in
+  `/data/.retention-state.json` (mode 0600; a file that cannot be read, parsed
+  or holds impossible values refuses that store, `reason: state`). During a
+  notice the schema is still checked; a state dated in the future is capped
+  at now, never restarted. The `config.audit` event states the period, the
+  notice and, per store, when its period took effect, when its notice ends and
+  the period in force meanwhile. A banner
   (`WEBUI_BANNERS`, English and German via its `i18n`, the UI's `de-DE`) tells
   every user that chats are deleted that many days after they were started;
   a notice per chat would need a change to the upstream UI.

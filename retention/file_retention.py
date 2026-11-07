@@ -137,6 +137,9 @@ def due_uploads(conn: sqlite3.Connection, cutoff: int) -> list[tuple[str, str | 
 def count_uploads(conn: sqlite3.Connection, cutoff: int) -> tuple[int, int]:
     """Count what a sweep with this cutoff would delete and keep (the dry run).
 
+    An upload whose recorded path is outside the upload directory is never
+    deleted, so it counts as kept.
+
     Args:
         conn: A read-only connection.
         cutoff: Seconds since the epoch.
@@ -144,9 +147,9 @@ def count_uploads(conn: sqlite3.Connection, cutoff: int) -> tuple[int, int]:
     Returns:
         Uploads that would be deleted, and uploads that would stay.
     """
-    (due,) = conn.execute("SELECT count(*) FROM file WHERE created_at < ?", (cutoff,)).fetchone()
+    due = sum(1 for _, _, path in due_uploads(conn, cutoff) if upload_name(path) is not None)
     (total,) = conn.execute("SELECT count(*) FROM file").fetchone()
-    return int(due), int(total) - int(due)
+    return due, int(total) - due
 
 
 class FileSweeper:

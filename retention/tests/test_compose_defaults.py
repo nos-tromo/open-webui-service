@@ -22,7 +22,7 @@ class ComposeDefaultsTest(unittest.TestCase):
         self.text = COMPOSE.read_text(encoding="utf-8")
 
     def test_retention_is_on_by_default(self) -> None:
-        """Chats, notes and uploads go after 365 days; a new or changed period waits 30 days."""
+        """Chats, notes and uploads go after 365 days; a new period waits 30 days."""
         self.assertIn("OPEN_WEBUI_CHAT_RETENTION_DAYS: ${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365}", self.text)
         self.assertIn("RETENTION_NOTICE_DAYS: ${RETENTION_NOTICE_DAYS:-30}", self.text)
 
