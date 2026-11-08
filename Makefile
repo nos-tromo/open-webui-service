@@ -40,7 +40,7 @@ help:
 	@echo "open-webui-service — Open WebUI chat UI on inference-net."
 	@echo
 	@echo "Setup (first time):"
-	@echo "  cp .env.example .env   # then set OPENAI_API_BASE_URL / OPENAI_API_KEY"
+	@echo "  cp .env.example .env   # then set OPENAI_API_KEY and EDGE_HOST"
 	@echo
 	@echo "Lifecycle:"
 	@echo "  make network    create the external $(INFERENCE_NET) and $(EDGE_NET) if missing"
