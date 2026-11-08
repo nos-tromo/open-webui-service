@@ -273,6 +273,8 @@ make bundle-dev          # same, from the current working tree
 
 ## Configuration
 
+`.env.example` follows deploy's shared format (deploy `docs/runbooks/env-sync.md`, For member authors); check with `python3 -B ../deploy/scripts/check_env_examples.py .`
+
 A single `.env` at the **repo root** (copy from `.env.example`) drives everything. It is consumed two ways — don't conflate them:
 
 1. **Compose variable substitution** (`${VAR:-default}` in the YAML): `OPENAI_API_BASE_URL`, `OPENAI_API_KEY`, `TEXT_MODEL` (→ `DEFAULT_MODELS`, the chat model auto-selected for new chats), `RAG_EMBEDDING_MODEL`, `INFERENCE_NET`, `OPEN_WEBUI_HOST_PORT`, and the retention periods `OPEN_WEBUI_AUDIO_RETENTION_MINUTES`, `OPEN_WEBUI_CHAT_RETENTION_DAYS`, `OPEN_WEBUI_RETENTION_INTERVAL_S` (§ Retention). The Makefile passes these via `--env-file .env`. `TEXT_MODEL` and `RAG_EMBEDDING_MODEL` follow the stack-wide model-naming convention and must name models the endpoint actually serves.

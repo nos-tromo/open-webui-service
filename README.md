@@ -42,7 +42,7 @@ goes out via `OPENAI_API_BASE_URL`.
 
 ```bash
 cp .env.example .env        # REQUIRED — compose runs with --env-file .env
-# edit .env: set OPENAI_API_BASE_URL / OPENAI_API_KEY and the model ids
+# edit .env: set OPENAI_API_KEY and EDGE_HOST (the model ids are optional)
 
 make network                # create inference-net + edge-net (idempotent; up/up-dev also do this)
 make volumes                # create open-webui-data   (idempotent; up/up-dev also do this)
@@ -50,8 +50,7 @@ make pull                   # pull the pinned images
 make up-dev                 # start, publishing the UI on the host
 ```
 
-Then open `http://localhost:${OPEN_WEBUI_HOST_PORT}` (the example `.env` sets
-`8080`; the built-in default is `3000`). The first account you register becomes
+Then open `http://localhost:${OPEN_WEBUI_HOST_PORT}` (default `3000`). The first account you register becomes
 the admin.
 
 For production, use `make up` instead — same service with **no published host
@@ -111,7 +110,7 @@ mandatory before any target.
 | Variable               | Purpose | Default |
 |------------------------|---------|---------|
 | `OPENAI_API_BASE_URL`  | OpenAI-compatible endpoint for chat + RAG. | `http://vllm-router:4000/v1` |
-| `OPENAI_API_KEY`       | API key for that endpoint. | `sk-1234567890` |
+| `OPENAI_API_KEY`       | API key for that endpoint (the router's master key; set it in `.env`). | `sk-1234567890` (placeholder) |
 | `TEXT_MODEL`           | Chat model auto-selected for new chats (→ `DEFAULT_MODELS`). | empty (UI auto-selects) |
 | `EMBED_MODEL`          | Embedding model for RAG (→ `RAG_EMBEDDING_MODEL`). | `bge-m3:latest` |
 | `WHISPER_API_BASE`     | Separate STT endpoint. Unset ⇒ follows `OPENAI_API_BASE_URL`. | — |
