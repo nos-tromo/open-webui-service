@@ -723,6 +723,7 @@ _RELATED_LABELS: Final = {
     "notifications": "notifications",
     "feedback": "ratings",
     "legacy_tag_links": "legacy tag links",
+    "views": "saved views",
 }
 
 

@@ -66,9 +66,11 @@ trusted-header variables. Authelia is the only login screen.
 
 The bundled auth is bypassed via that header, not disabled. Because the
 container also sits on `inference-net`, a small nginx sidecar (`edge-guard`)
-is the only listener in front of it. It forwards the identity headers only
-when the request carries the gateway's secret (`OPEN_WEBUI_EDGE_SECRET`, the
-same value as in edge-plane's `.env`), and it refuses file uploads, knowledge
+is the only listener in front of it. With the gateway's secret set
+(`OPEN_WEBUI_EDGE_SECRET`, the same value as in edge-plane's `.env`), it
+refuses every request that does not carry it, so Open WebUI is reachable only
+through the gateway and every request has passed Authelia. It forwards the
+identity headers only on those requests, and it refuses file uploads, knowledge
 bases and retrieval processing for every account, so documents are not stored
 here (memories and notes are off too). It also refuses message ratings, each of which
 would keep a full copy of its chat that admins could read. Having no

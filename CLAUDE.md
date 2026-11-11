@@ -72,17 +72,28 @@ cannot check where a header came from. So Open WebUI listens on
 `edge-guard` service, an `nginx-unprivileged` sidecar with
 `network_mode: "service:open-webui"`, is the only listener on `:8080` in
 that shared network namespace. Both networks and the dev host port therefore
-reach the guard, never Open WebUI directly. The guard forwards the identity
-headers only when `X-Edge-Secret` equals `OPEN_WEBUI_EDGE_SECRET`, the value
-the edge gateway sends (edge-plane's `docs/identity-contract.md`).
-Otherwise it drops them, and the request reaches Open WebUI with no identity.
+reach the guard, never Open WebUI directly. With `OPEN_WEBUI_EDGE_SECRET` set,
+the guard answers `403` (JSON `detail`) to every request whose
+`X-Edge-Secret` is not that value, the one the edge gateway sends
+(edge-plane's `docs/identity-contract.md`), before any other rule. So Open
+WebUI is reachable only through the gateway, and every request has passed
+Authelia. Dropping forged headers alone would not be enough: Open WebUI checks
+the trusted e-mail only when the header is present (pinned image,
+`utils/auth.py` `get_current_user`), so a JWT alone would pass, and since
+v0.13.3 a JWT can be traded for a 90-day refresh token
+(`/api/v1/auths/sessions`, renewable sessions for native clients such as
+Tether). The guard forwards the identity headers only on verified requests.
 It always strips `X-Edge-Secret`, proxies WebSockets (socket.io) and
-streams unbuffered. With the secret unset it forwards the headers as before
-(legacy). Config: `nginx/edge-guard.conf.template`, rendered by the image's
-envsubst, which is why compose always defines the variable, even when empty.
+streams unbuffered. With the secret unset, every request without the header
+passes and keeps its identity headers, as before (legacy, dev); one that
+carries some `X-Edge-Secret` anyway is refused. Config:
+`nginx/edge-guard.conf.template`, rendered by the image's envsubst, which is
+why compose always defines the variable, even when empty.
 Gotchas: recreating `open-webui` must recreate `edge-guard` too, since it
 lives in that container's namespace (`make up` does both). The image's
-healthcheck follows `PORT`, so it probes `8081` inside the container.
+healthcheck follows `PORT`, so it probes `8081` inside the container. With the
+secret set, `make up-dev`'s host port answers `403` too, unless the request
+carries the header.
 
 Open WebUI has no base-path / sub-path support (confirmed empirically —
 its built-in frontend serves root-absolute asset paths, e.g. `/_app/...`,
@@ -146,10 +157,11 @@ no network and `open-webui-data` at `/data`.
   (`chat_message`), shared snapshots (`shared_chat`) and their access grants,
   file links (`chat_file`), comments and their reactions, the notifications
   about it, the ratings of its messages (`feedback`, each holding a full copy of
-  the chat in `snapshot`), legacy tag links (`chatidtag`), the internal
-  (sub-agent) chats spawned from it at any depth, and the owner's tags that no
-  remaining visible chat of theirs carries (internal chats do not count, as in
-  upstream's own check). Automation runs keep their record and lose the
+  the chat in `snapshot`), legacy tag links (`chatidtag`), every viewer's
+  saved working view of it (`chat_view_state`: open tabs, their labels, file
+  paths and terminal folders), the internal (sub-agent) chats spawned from it
+  at any depth, and the owner's tags that no remaining visible chat of theirs
+  carries (internal chats do not count, as in upstream's own check). Automation runs keep their record and lose the
   link; uploaded files and folders belong to their owner and stay. Pinned and
   archived chats are not exempt. An internal chat whose parent still exists
   lives as long as the parent; one whose parent is gone expires on its own age.
@@ -211,7 +223,7 @@ no network and `open-webui-data` at `/data`.
   the log is emptied. When an Open WebUI reader keeps the log busy past the
   busy timeout, the sweep logs a warning and a later checkpoint carries it.
 - **Schema guard.** Chat retention runs only on the schema it was verified
-  against: migration revision `e42c8f710a36` (Open WebUI v0.13.0;
+  against: migration revision `9f6c2a8d1b43` (Open WebUI v0.13.3;
   `VERIFIED_REVISIONS` in `retention/chat_retention.py`), every column its
   statements use, and no table besides the ones it cleans that has a `chat_id`
   column or a foreign key to `chat`. It is checked before the sweep and again

@@ -1,6 +1,6 @@
 """Open WebUI's audio caches: the files the sweeper deletes and how it records them.
 
-Open WebUI v0.13.0 keeps two audio caches on its data volume and deletes from
+Open WebUI v0.13.3 keeps two audio caches on its data volume and deletes from
 neither (``backend/open_webui/routers/audio/__init__.py``):
 
 ``cache/audio/transcriptions``

@@ -1,6 +1,6 @@
 """Chat retention in Open WebUI's SQLite database (``webui.db``).
 
-Open WebUI v0.13.0 has no retention setting for chats, and with admin access to
+Open WebUI v0.13.3 has no retention setting for chats, and with admin access to
 other users' chats closed nobody can expire them through its API, so the sweeper
 deletes them in the database itself: every chat not changed for the configured
 number of days, with everything that belongs only to it. What that is was read
@@ -22,6 +22,8 @@ upstream's own delete leaves copies behind, the sweeper removes them too:
 * its file links (``chat_file``; Open WebUI never turns SQLite's foreign keys
   on, so the declared cascade does not fire) and legacy tag links
   (``chatidtag``);
+* every viewer's saved working view of it (``chat_view_state``: open tabs,
+  their labels, file paths and terminal folders), as upstream's delete does;
 * the owner's tags that no remaining chat of theirs uses, as upstream's delete
   route does.
 
@@ -74,8 +76,8 @@ from sweep_events import counted, emit_deletion, iso_utc
 LOG = logging.getLogger("retention")
 
 #: The migration revisions whose schema this module was verified against:
-#: Open WebUI v0.13.0 (``alembic_version`` of a freshly migrated database).
-VERIFIED_REVISIONS: Final = frozenset({"e42c8f710a36"})
+#: Open WebUI v0.13.3 (``alembic_version`` of a freshly migrated database).
+VERIFIED_REVISIONS: Final = frozenset({"9f6c2a8d1b43"})
 #: The columns the statements below read or write, by table.
 REQUIRED_COLUMNS: Final[Mapping[str, frozenset[str]]] = {
     "alembic_version": frozenset({"version_num"}),
@@ -93,12 +95,15 @@ REQUIRED_COLUMNS: Final[Mapping[str, frozenset[str]]] = {
     "notification": frozenset({"resource_type", "resource_id"}),
     "feedback": frozenset({"meta"}),
     "chatidtag": frozenset({"chat_id"}),
+    "chat_view_state": frozenset({"chat_id"}),
     "automation_run": frozenset({"chat_id"}),
     "tag": frozenset({"id", "user_id"}),
 }
 #: Every table with a ``chat_id`` column or a foreign key to ``chat``; all of
 #: them are cleaned up below. Any other is a schema this module does not know.
-CHAT_ID_TABLES: Final = frozenset({"automation_run", "chat_file", "chat_message", "chatidtag", "shared_chat"})
+CHAT_ID_TABLES: Final = frozenset(
+    {"automation_run", "chat_file", "chat_message", "chat_view_state", "chatidtag", "shared_chat"}
+)
 #: Chats a batch starts from, at most; their internal chats come with them.
 ROOTS_PER_BATCH: Final = 50
 #: Chat ids per batch, at most: one record's worth, so a batch is one event.
@@ -168,6 +173,7 @@ RELATED: Final = (
     Related("notifications", "notification", "resource_type = 'chat' AND resource_id IN ({ids})"),
     Related("feedback", "feedback", f"{_json('$.chat_id')} IN ({{ids}})"),
     Related("legacy_tag_links", "chatidtag", "chat_id IN ({ids})"),
+    Related("views", "chat_view_state", "chat_id IN ({ids})"),
     Related("automation_runs_unlinked", "automation_run", "chat_id IN ({ids})", unlink="chat_id = NULL"),
 )
 

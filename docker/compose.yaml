@@ -17,7 +17,7 @@ services:
   # docint/docker/compose.yaml.
   ##########################################################
   volume-permissions:
-    image: ghcr.io/open-webui/open-webui:v0.13.0@sha256:2272b0fb7c8783a016bcc179abb467cfa34590c99c5e6560fe0e9155b4820a09
+    image: ghcr.io/open-webui/open-webui:v0.13.3@sha256:46b59158e6558eeb980bc828e0f1b30238ad24d82ed84d5e5eda1dab2a082f14
     user: "0:0"
     read_only: true
     security_opt:
@@ -42,7 +42,7 @@ services:
     restart: "no"
 
   open-webui:
-    image: ghcr.io/open-webui/open-webui:v0.13.0@sha256:2272b0fb7c8783a016bcc179abb467cfa34590c99c5e6560fe0e9155b4820a09
+    image: ghcr.io/open-webui/open-webui:v0.13.3@sha256:46b59158e6558eeb980bc828e0f1b30238ad24d82ed84d5e5eda1dab2a082f14
     # Container hardening (deploy ADR 0001). The image defaults to root;
     # run it as the federation's app uid instead. All durable writes land
     # on open-webui-data (ownership is self-healed by the volume-permissions
@@ -246,8 +246,10 @@ services:
   # namespace (network_mode below), so it owns :8080 on both
   # networks and the dev host port. Open WebUI trusts the
   # identity headers but cannot check where they came from;
-  # this nginx forwards them only when X-Edge-Secret matches
-  # OPEN_WEBUI_EDGE_SECRET, the value the edge gateway sends.
+  # with OPEN_WEBUI_EDGE_SECRET set, this nginx answers 403 to
+  # every request whose X-Edge-Secret does not match (the
+  # gateway sends it), so only requests that passed Authelia
+  # reach Open WebUI, and forwards the headers only on those.
   # Unset secret: headers pass as before. Config:
   # nginx/edge-guard.conf.template.
   ##########################################################

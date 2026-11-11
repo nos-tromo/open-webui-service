@@ -27,6 +27,7 @@ from tests.synthetic import (
     BOB,
     DAY,
     NOW,
+    REVISION,
     SENTINEL,
     FailingStream,
     Store,
@@ -345,7 +346,7 @@ class RefusalTest(Volume):
         rounds, stream = self.rounds(self.settings)
         with self.assertLogs("retention", "INFO"):
             rounds.run(NOW)
-            self.store.conn.execute("UPDATE alembic_version SET version_num = 'e42c8f710a36'")
+            self.store.conn.execute("UPDATE alembic_version SET version_num = ?", (REVISION,))
             rounds.run(NOW + 60)
         operations = [event["operation"] for event in events(stream)]
         self.assertEqual(operations.count("retention.refused"), 3)
@@ -584,6 +585,7 @@ class DryRunTest(Volume):
         self.assertIn("of them internal chats going with their parent: 1", text)
         self.assertIn("messages 1", text)
         self.assertIn("ratings 1", text)
+        self.assertIn("saved views 1", text)
         self.assertIn("keeps: 1 chat\n", text)
         self.assertIn("automation runs that keep their record and lose the link: 1", text)
         for secret in (SENTINEL, parent, ALICE, BOB, "alice@example.org", "rec-0001", "topic"):
