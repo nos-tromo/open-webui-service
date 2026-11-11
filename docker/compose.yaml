@@ -246,8 +246,10 @@ services:
   # namespace (network_mode below), so it owns :8080 on both
   # networks and the dev host port. Open WebUI trusts the
   # identity headers but cannot check where they came from;
-  # this nginx forwards them only when X-Edge-Secret matches
-  # OPEN_WEBUI_EDGE_SECRET, the value the edge gateway sends.
+  # with OPEN_WEBUI_EDGE_SECRET set, this nginx answers 403 to
+  # every request whose X-Edge-Secret does not match (the
+  # gateway sends it), so only requests that passed Authelia
+  # reach Open WebUI, and forwards the headers only on those.
   # Unset secret: headers pass as before. Config:
   # nginx/edge-guard.conf.template.
   ##########################################################

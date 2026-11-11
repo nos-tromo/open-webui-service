@@ -4,10 +4,15 @@
 # SSO) but cannot tell who sent them, and it sits on inference-net, where any
 # container could otherwise reach it with forged headers. So Open WebUI
 # listens on 127.0.0.1:8081 only, and this nginx, sharing its network
-# namespace, takes :8080. It passes the identity headers on only when
-# X-Edge-Secret equals OPEN_WEBUI_EDGE_SECRET (sent by the edge gateway) and
-# drops them otherwise. With the secret unset, both sides are empty and every
-# request passes them, as before this guard existed.
+# namespace, takes :8080. With OPEN_WEBUI_EDGE_SECRET set, it answers 403 to
+# every request whose X-Edge-Secret is not that value (sent only by the edge
+# gateway), so every request that reaches Open WebUI passed Authelia: a JWT
+# alone is not enough, since Open WebUI checks the identity header only when
+# one is present, and neither are the refresh tokens of its renewable sessions
+# (v0.13.3, /api/v1/auths/sessions, 90 days). It passes the identity headers
+# on only from verified requests and drops them otherwise. With the secret
+# unset, both sides are empty and every request without the header passes
+# with them, as before this guard existed.
 #
 # Rendered by the image's entrypoint: envsubst replaces only defined
 # environment variables, so nginx's own $variables stay as they are.
@@ -73,6 +78,18 @@ server {
     set $edge_verified 0;
     if ($http_x_edge_secret = "${OPEN_WEBUI_EDGE_SECRET}") {
         set $edge_verified 1;
+    }
+
+    # Only the gateway: an unverified request answers 403 with a JSON detail,
+    # the shape of upstream's own errors, before anything else. 420 is only
+    # the internal hand-off.
+    error_page 420 = @gateway_only;
+    if ($edge_verified = 0) {
+        return 420;
+    }
+    location @gateway_only {
+        default_type application/json;
+        return 403 '{"detail":"Open WebUI is reachable only through the edge gateway."}';
     }
 
     # Refused intake (the map above) answers 403 with a JSON detail, the
