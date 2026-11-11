@@ -1,7 +1,7 @@
 """Synthetic Open WebUI data for the tests: a database with the pinned schema, cache files.
 
 The database is built from ``fixtures/webui-schema.sql``, the verbatim
-``sqlite_master`` of a database the pinned image (Open WebUI v0.13.0) migrated,
+``sqlite_master`` of a database the pinned image (Open WebUI v0.13.3) migrated,
 and runs in WAL mode as Open WebUI's does. Every row is invented; every text
 field carries :data:`SENTINEL`, which must never reach a record or a report.
 """
@@ -20,7 +20,7 @@ from audit_event import AuditEmitter, AuditWriteError, verify_chain
 from sweep_events import SERVICE
 
 SCHEMA = (Path(__file__).resolve().parent / "fixtures" / "webui-schema.sql").read_text(encoding="utf-8")
-REVISION = "e42c8f710a36"
+REVISION = "9f6c2a8d1b43"
 #: A fixed "now" for the tests: 2026-09-20T12:00:00Z.
 NOW = 1_789_905_600
 DAY = 86_400
@@ -31,7 +31,7 @@ BOB = "0d0a1a1e-0000-4000-8000-0000000000b0"
 
 
 def make_database(path: Path, *, revision: str | None = REVISION) -> None:
-    """Create an Open WebUI v0.13.0 database with two synthetic accounts.
+    """Create an Open WebUI v0.13.3 database with two synthetic accounts.
 
     Args:
         path: The database file to create.
@@ -224,7 +224,8 @@ class Store:
         """Add one row of every kind that belongs to a chat.
 
         A share and its access grant, a file link, a comment with a reaction, a
-        notification, a rating, a legacy tag link, and an automation run.
+        notification, a rating, a legacy tag link, another account's saved view
+        of it, and an automation run.
 
         Args:
             chat_id: The chat.
@@ -282,6 +283,10 @@ class Store:
         self.conn.execute(
             "INSERT INTO chatidtag (id, tag_name, chat_id, user_id, timestamp) VALUES (?, ?, ?, ?, ?)",
             (self._id("legacy"), SENTINEL, chat_id, owner, NOW),
+        )
+        self.conn.execute(
+            "INSERT INTO chat_view_state (user_id, chat_id, state, updated_at) VALUES (?, ?, ?, ?)",
+            (BOB, chat_id, json.dumps({"schemaVersion": 1, "panels": {"tabs": [{"label": SENTINEL}]}}), NOW),
         )
         self.conn.execute(
             "INSERT INTO automation_run (id, automation_id, chat_id, status, created_at) "

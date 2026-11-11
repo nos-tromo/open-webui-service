@@ -218,12 +218,12 @@ CREATE TABLE "channel_file" (
 	PRIMARY KEY (id), 
 	CONSTRAINT uq_channel_file_channel_file UNIQUE (channel_id, file_id), 
 	CONSTRAINT fk_channel_file_message_id FOREIGN KEY(message_id) REFERENCES message (id) ON DELETE CASCADE, 
-	FOREIGN KEY(channel_id) REFERENCES channel (id) ON DELETE CASCADE, 
-	FOREIGN KEY(file_id) REFERENCES file (id) ON DELETE CASCADE
+	FOREIGN KEY(file_id) REFERENCES file (id) ON DELETE CASCADE, 
+	FOREIGN KEY(channel_id) REFERENCES channel (id) ON DELETE CASCADE
 );
-CREATE INDEX ix_channel_file_user_id ON channel_file (user_id);
-CREATE INDEX ix_channel_file_channel_id ON channel_file (channel_id);
 CREATE INDEX ix_channel_file_file_id ON channel_file (file_id);
+CREATE INDEX ix_channel_file_channel_id ON channel_file (channel_id);
+CREATE INDEX ix_channel_file_user_id ON channel_file (user_id);
 CREATE TABLE chat_file (
 	id TEXT NOT NULL, 
 	user_id TEXT NOT NULL, 
@@ -237,10 +237,10 @@ CREATE TABLE chat_file (
 	FOREIGN KEY(chat_id) REFERENCES chat (id) ON DELETE CASCADE, 
 	FOREIGN KEY(file_id) REFERENCES file (id) ON DELETE CASCADE
 );
-CREATE INDEX ix_chat_file_chat_id ON chat_file (chat_id);
-CREATE INDEX ix_chat_file_message_id ON chat_file (message_id);
 CREATE INDEX ix_chat_file_user_id ON chat_file (user_id);
 CREATE INDEX ix_chat_file_file_id ON chat_file (file_id);
+CREATE INDEX ix_chat_file_chat_id ON chat_file (chat_id);
+CREATE INDEX ix_chat_file_message_id ON chat_file (message_id);
 CREATE TABLE prompt_history (
 	id TEXT NOT NULL, 
 	prompt_id TEXT NOT NULL, 
@@ -273,10 +273,10 @@ CREATE TABLE chat_message (
 	PRIMARY KEY (id), 
 	FOREIGN KEY(chat_id) REFERENCES chat (id) ON DELETE CASCADE
 );
-CREATE INDEX ix_chat_message_chat_id ON chat_message (chat_id);
 CREATE INDEX ix_chat_message_created_at ON chat_message (created_at);
-CREATE INDEX ix_chat_message_model_id ON chat_message (model_id);
 CREATE INDEX ix_chat_message_user_id ON chat_message (user_id);
+CREATE INDEX ix_chat_message_model_id ON chat_message (model_id);
+CREATE INDEX ix_chat_message_chat_id ON chat_message (chat_id);
 CREATE INDEX chat_message_chat_parent_idx ON chat_message (chat_id, parent_id);
 CREATE INDEX chat_message_model_created_idx ON chat_message (model_id, created_at);
 CREATE INDEX chat_message_user_created_idx ON chat_message (user_id, created_at);
@@ -522,8 +522,8 @@ CREATE TABLE "knowledge_file" (
 	FOREIGN KEY(knowledge_id) REFERENCES knowledge (id) ON DELETE CASCADE
 );
 CREATE INDEX ix_knowledge_file_user_id ON knowledge_file (user_id);
-CREATE INDEX ix_knowledge_file_knowledge_id ON knowledge_file (knowledge_id);
 CREATE INDEX ix_knowledge_file_file_id ON knowledge_file (file_id);
+CREATE INDEX ix_knowledge_file_knowledge_id ON knowledge_file (knowledge_id);
 CREATE INDEX ix_knowledge_file_directory_id ON knowledge_file (directory_id);
 CREATE TABLE config (
 	"key" TEXT NOT NULL, 
@@ -695,3 +695,26 @@ CREATE INDEX ix_notification_user_created ON notification (user_id, created_at, 
 CREATE INDEX ix_notification_unseen ON notification (user_id, created_at, id) WHERE seen_at IS NULL;
 CREATE INDEX ix_notification_resource ON notification (resource_type, resource_id);
 CREATE INDEX ix_notification_object ON notification (object_type, object_id);
+CREATE TABLE auth_session (
+	id TEXT NOT NULL, 
+	user_id TEXT, 
+	refresh_token_id TEXT, 
+	data JSON NOT NULL, 
+	created_at BIGINT NOT NULL, 
+	updated_at BIGINT NOT NULL, 
+	expires_at BIGINT NOT NULL, 
+	PRIMARY KEY (id)
+);
+CREATE INDEX idx_auth_session_user ON auth_session (user_id);
+CREATE INDEX idx_auth_session_expires ON auth_session (expires_at);
+CREATE TABLE chat_view_state (
+	user_id TEXT NOT NULL, 
+	chat_id TEXT NOT NULL, 
+	state JSON NOT NULL, 
+	updated_at BIGINT NOT NULL, 
+	PRIMARY KEY (user_id, chat_id)
+);
+CREATE INDEX ix_chat_view_state_chat_id ON chat_view_state (chat_id);
+CREATE INDEX ix_message_channel_parent_created ON message (channel_id, parent_id, created_at);
+CREATE INDEX ix_message_parent_id ON message (parent_id);
+CREATE INDEX ix_message_reaction_message_id ON message_reaction (message_id);

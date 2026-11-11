@@ -24,6 +24,7 @@ from tests.synthetic import (
     BOB,
     DAY,
     NOW,
+    REVISION,
     SENTINEL,
     FailingStream,
     Store,
@@ -145,7 +146,7 @@ class SchemaGuardTest(Workspace):
         with mock.patch.object(chat_retention, "plan_owner", plan_then_migrate), self.assertRaises(SchemaRefused):
             ChatSweeper(audit, self.database, 30, pause_s=0).sweep(NOW)
         audit.close()
-        self.store.conn.execute("UPDATE alembic_version SET version_num = 'e42c8f710a36'")
+        self.store.conn.execute("UPDATE alembic_version SET version_num = ?", (REVISION,))
         self.assertEqual(self.store.rows(), before)
         self.assertEqual(deletions(stream), [])
 
@@ -174,6 +175,7 @@ class SweepTest(Workspace):
             ("shared_chat", "chat_id"),
             ("chat_file", "chat_id"),
             ("chatidtag", "chat_id"),
+            ("chat_view_state", "chat_id"),
         ):
             self.assertEqual(self.store.count(table, f"{column} = ?", (expired,)), 0, table)
             self.assertEqual(self.store.count(table, f"{column} = ?", (kept,)), 1, table)
@@ -209,6 +211,7 @@ class SweepTest(Workspace):
                 "notifications": 1,
                 "feedback": 1,
                 "legacy_tag_links": 1,
+                "views": 1,
                 "automation_runs_unlinked": 1,
                 "tags": 1,
             },

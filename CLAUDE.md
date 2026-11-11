@@ -146,10 +146,11 @@ no network and `open-webui-data` at `/data`.
   (`chat_message`), shared snapshots (`shared_chat`) and their access grants,
   file links (`chat_file`), comments and their reactions, the notifications
   about it, the ratings of its messages (`feedback`, each holding a full copy of
-  the chat in `snapshot`), legacy tag links (`chatidtag`), the internal
-  (sub-agent) chats spawned from it at any depth, and the owner's tags that no
-  remaining visible chat of theirs carries (internal chats do not count, as in
-  upstream's own check). Automation runs keep their record and lose the
+  the chat in `snapshot`), legacy tag links (`chatidtag`), every viewer's
+  saved working view of it (`chat_view_state`: open tabs, their labels, file
+  paths and terminal folders), the internal (sub-agent) chats spawned from it
+  at any depth, and the owner's tags that no remaining visible chat of theirs
+  carries (internal chats do not count, as in upstream's own check). Automation runs keep their record and lose the
   link; uploaded files and folders belong to their owner and stay. Pinned and
   archived chats are not exempt. An internal chat whose parent still exists
   lives as long as the parent; one whose parent is gone expires on its own age.
@@ -211,7 +212,7 @@ no network and `open-webui-data` at `/data`.
   the log is emptied. When an Open WebUI reader keeps the log busy past the
   busy timeout, the sweep logs a warning and a later checkpoint carries it.
 - **Schema guard.** Chat retention runs only on the schema it was verified
-  against: migration revision `e42c8f710a36` (Open WebUI v0.13.0;
+  against: migration revision `9f6c2a8d1b43` (Open WebUI v0.13.3;
   `VERIFIED_REVISIONS` in `retention/chat_retention.py`), every column its
   statements use, and no table besides the ones it cleans that has a `chat_id`
   column or a foreign key to `chat`. It is checked before the sweep and again
