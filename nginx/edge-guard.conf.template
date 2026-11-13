@@ -65,6 +65,19 @@ map "$request_method $uri" $owui_rating {
     "~*^(GET|HEAD) /api/v1/evaluations/feedbacks/all/export(/|$)"  1;
 }
 
+# Creating or changing tools and functions is refused for everyone, admins
+# included. Both are Python that Open WebUI runs inside its backend, without a
+# sandbox (utils/plugin.py). Open WebUI refuses to load that code while
+# ENABLE_TOOLS and ENABLE_FUNCTIONS are false, but its routers check neither
+# switch themselves; this is the second layer, which holds even if an image
+# bump moves that check or the switches are dropped. So every write under those
+# two routers is refused; reading and deleting still pass, so anything stored
+# before can be cleared. Matched like the intake above.
+map "$request_method $uri" $owui_code {
+    default                                                  0;
+    "~*^(POST|PUT|PATCH) /api/v1/(tools|functions)(/|$)"     1;
+}
+
 server {
     listen 8080;
     server_tokens off;
@@ -112,6 +125,17 @@ server {
     location @rating_refused {
         default_type application/json;
         return 403 '{"detail":"Message ratings are disabled in this deployment."}';
+    }
+
+    # Refused tool and function writes (the map above) the same way; 421 is
+    # their internal hand-off.
+    error_page 421 = @code_refused;
+    if ($owui_code) {
+        return 421;
+    }
+    location @code_refused {
+        default_type application/json;
+        return 403 '{"detail":"Tools and functions cannot be created or changed in this deployment."}';
     }
 
     location / {

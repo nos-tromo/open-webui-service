@@ -210,6 +210,22 @@ services:
       # upstream's routes check neither, so edge-guard refuses them.
       ENABLE_MESSAGE_RATING: false
       USER_PERMISSIONS_CHAT_RATE_RESPONSE: false
+      # No code runs inside Open WebUI. Its tools and functions are Python the
+      # backend runs with exec, without a sandbox and with the whole database
+      # in reach (utils/plugin.py); the code interpreter and code execution run
+      # in the user's browser and keep its files in IndexedDB, out of reach of
+      # the retention service. No tool server is connected, so they are off
+      # too. Open WebUI enforces ENABLE_TOOLS and ENABLE_FUNCTIONS where the
+      # code is loaded (utils/plugin.py); edge-guard refuses the writes to the
+      # tools and functions routers as a second layer. Automations and
+      # sub-agents are pinned at their upstream default, off.
+      ENABLE_TOOLS: false
+      ENABLE_FUNCTIONS: false
+      ENABLE_TOOL_SERVERS: false
+      ENABLE_CODE_INTERPRETER: false
+      ENABLE_CODE_EXECUTION: false
+      USER_PERMISSIONS_FEATURES_AUTOMATIONS: false
+      ENABLE_SUBAGENTS: false
       # The image already sets these; pinned here so an upstream default
       # change cannot switch telemetry back on.
       SCARF_NO_ANALYTICS: true
