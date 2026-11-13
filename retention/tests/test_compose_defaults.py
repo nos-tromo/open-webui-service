@@ -31,6 +31,20 @@ class ComposeDefaultsTest(unittest.TestCase):
         self.assertIn("ENABLE_NOTES: false", self.text)
         self.assertIn("USER_PERMISSIONS_FEATURES_NOTES: false", self.text)
 
+    def test_no_code_runs_inside_open_webui(self) -> None:
+        """Tools, functions, tool servers, the code interpreter, code execution and sub-agents are off."""
+        for line in (
+            "ENABLE_TOOLS: false",
+            "ENABLE_FUNCTIONS: false",
+            "ENABLE_TOOL_SERVERS: false",
+            "ENABLE_CODE_INTERPRETER: false",
+            "ENABLE_CODE_EXECUTION: false",
+            "USER_PERMISSIONS_FEATURES_AUTOMATIONS: false",
+            "ENABLE_SUBAGENTS: false",
+        ):
+            with self.subTest(line=line):
+                self.assertRegex(self.text, rf"(?m)^ +{re.escape(line)}$")
+
     def test_the_banner_names_the_period_in_english_and_german(self) -> None:
         """WEBUI_BANNERS is one info banner whose text takes the chats' period from the same variable."""
         match = re.search(r"^ +WEBUI_BANNERS: '(.*)'$", self.text, re.MULTILINE)
