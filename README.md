@@ -73,7 +73,9 @@ through the gateway and every request has passed Authelia. It forwards the
 identity headers only on those requests, and it refuses file uploads, knowledge
 bases and retrieval processing for every account, so documents are not stored
 here (memories and notes are off too). It also refuses message ratings, each of which
-would keep a full copy of its chat that admins could read. Having no
+would keep a full copy of its chat that admins could read, and creating or
+changing tools and functions, which Open WebUI would run as Python inside its
+backend; its code interpreter is off too. Having no
 base-path support upstream,
 Open WebUI gets its own gateway port rather than a sub-path:
 `https://<EDGE_HOST>:8443/`.
