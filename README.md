@@ -28,9 +28,9 @@ goes out via `OPENAI_API_BASE_URL`.
 ## Prerequisites
 
 - Docker Engine with the Compose v2 plugin (`docker compose`, not `docker-compose`).
-- The external `inference-net` **and `edge-net`** networks (both created by
-  `make network`, idempotent). `edge-net` is declared `external: true`, so a
-  missing one makes `make up` fail.
+- The external `inference-net`, **`edge-net` and `workbench-net`** networks
+  (all created by `make network`, idempotent). Each is declared
+  `external: true`, so a missing one makes `make up` fail.
 - The external `open-webui-data` volume (created by `make volumes`, idempotent) —
   all app state lives here, kept out of the compose project so teardown can't
   delete it.
@@ -44,7 +44,7 @@ goes out via `OPENAI_API_BASE_URL`.
 cp .env.example .env        # REQUIRED — compose runs with --env-file .env
 # edit .env: set OPENAI_API_KEY and EDGE_HOST (the model ids are optional)
 
-make network                # create inference-net + edge-net (idempotent; up/up-dev also do this)
+make network                # create inference-net, edge-net, workbench-net (idempotent; up/up-dev also do this)
 make volumes                # create open-webui-data   (idempotent; up/up-dev also do this)
 make pull                   # pull the pinned images
 make up-dev                 # start, publishing the UI on the host
@@ -83,6 +83,29 @@ Open WebUI gets its own gateway port rather than a sub-path:
 See [`CLAUDE.md`](./CLAUDE.md) § Access — edge gateway SSO for the
 first-account admin rule and the full header contract.
 
+## Workbench
+
+With `OPEN_WEBUI_WORKBENCH_KEY` set (the same value as in workbench's `.env`),
+Open WebUI connects to workbench, the federation's tool tier, as its one
+terminal server over the external `workbench-net`. The model reads, writes and
+runs code on the user's files there, in workbench's sandbox, and a chat with
+Workbench selected as its terminal sends its attachments into the user's
+workspace, never into Open WebUI. Without it, edge-guard refuses the upload,
+except in a temporary chat: there the browser sends a PDF's or text file's text
+to the model inline with the message, like pasted text, and nothing is stored
+(a temporary chat keeps no history, and workbench records nothing of it;
+`USER_PERMISSIONS_CHAT_TEMPORARY=false` would close that path, as the owner's
+option). That connection, from `.env`, is the only one. edge-guard refuses the
+admin routes that would change tool or terminal servers. Users cannot add their
+own either: direct tool servers stay off, and edge-guard refuses Tether, which
+would give a user a terminal of their own. A second banner tells every user
+that workspace files are deleted `WORKBENCH_RETENTION_DAYS` days after they
+were added (default 7). Since the terminal proxy's URLs carry file names, Open
+WebUI leaves them out of its audit log and runs without uvicorn's access log;
+workbench records each access itself, by file id. Without the key there are no
+tool servers and Open WebUI runs as before, except that the workspace banner
+still shows. Details: [`CLAUDE.md`](./CLAUDE.md) § Workbench.
+
 ## Operations
 
 Run everything via `make` from the repo root (`make help` lists all targets). It
@@ -91,7 +114,7 @@ wraps `docker compose --env-file .env -f docker/compose.yaml …` so the root
 
 | Target        | Does |
 |---------------|------|
-| `make network`| Create the external `inference-net` and `edge-net` if missing (idempotent). |
+| `make network`| Create the external `inference-net`, `edge-net` and `workbench-net` if missing (idempotent). |
 | `make volumes` | Create the external `open-webui-data` volume if missing (idempotent). |
 | `make pull`   | Pull the pinned images. |
 | `make up`     | Start detached, production shape — **no host ports**. |
@@ -120,6 +143,10 @@ mandatory before any target.
 | `WHISPER_API_BASE`     | Separate STT endpoint. Unset ⇒ follows `OPENAI_API_BASE_URL`. | — |
 | `INFERENCE_NET`        | Name of the shared inference network. | `inference-net` |
 | `EDGE_NET`             | Name of the shared gateway network the SPA is reached over. | `edge-net` |
+| `WORKBENCH_NET`        | Name of workbench's network. | `workbench-net` |
+| `WORKBENCH_URL`        | workbench's api, the terminal server Open WebUI calls. | `http://workbench-api:8000` |
+| `OPEN_WEBUI_WORKBENCH_KEY` | Bearer key for workbench; same value as workbench's. Empty ⇒ no tool servers. | empty |
+| `WORKBENCH_RETENTION_DAYS` | workbench's period for workspace files, for the banner; set it in workbench's `.env`. | `7` |
 | `EDGE_HOST`            | Gateway hostname; builds the post-sign-out redirect (`WEBUI_AUTH_SIGNOUT_REDIRECT_URL`). | `localhost` |
 | `OPEN_WEBUI_HOST_PORT` | Host port for `make up-dev`. | `3000` |
 | `OPEN_WEBUI_FORWARD_JWT_SECRET` | Signs the per-call user token the router records; same value as vllm-service's `AUDIT_OPENWEBUI_JWT_SECRET`. Empty ⇒ no user information is forwarded. | empty |
@@ -210,7 +237,8 @@ runtime.
 ## Audit log
 
 Every authenticated API request writes one audit record (account, verb, URI,
-source IP, model id; never a request or response body) to the container log.
+source IP, model id; never a request or response body) to the container log,
+except workbench's terminal proxy, which workbench records itself.
 Admins cannot read or export other users' chats. With
 `OPEN_WEBUI_FORWARD_JWT_SECRET` set, the router's record of each model call
 names the user too, from a signed token. Every deletion the retention

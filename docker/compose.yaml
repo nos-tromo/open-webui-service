@@ -65,6 +65,12 @@ services:
         max-file: "5"
         compress: "true"
     container_name: open-webui
+    # uvicorn's access log would print every request's URL with its query,
+    # and so the file names in the terminal proxy's URLs (§ Workbench).
+    # start.sh hands its arguments to uvicorn in place of its own defaults,
+    # so those two are repeated; AUDIT_UVICORN_LOGGER_NAMES below keeps Open
+    # WebUI from switching the access log back on at startup.
+    command: ["bash", "start.sh", "--workers", "1", "--ws-per-message-deflate", "true", "--no-access-log"]
     environment:
       NO_PROXY: "backend,frontend,localhost,127.0.0.1,172.16.0.0/12,10.0.0.0/8${EXTRA_NO_PROXY:-}"
       no_proxy: "backend,frontend,localhost,127.0.0.1,172.16.0.0/12,10.0.0.0/8${EXTRA_NO_PROXY:-}"
@@ -149,14 +155,21 @@ services:
       # URI, source IP, model) at METADATA level, i.e. without request or
       # response bodies, so no chat content. The upstream defaults skip the
       # chat and folder routes and every GET, which are exactly the edits
-      # and reads of stored chats, so both are switched back on. Records go
-      # to stdout with the container logs; the file sink is off so no second,
-      # never-pruned copy accumulates on the data volume.
+      # and reads of stored chats, so both are switched back on. Only the
+      # terminal proxy (/api/v1/terminals, a prefix) is skipped: its URLs
+      # carry file names, and workbench records those accesses itself, by
+      # file id. Records go to stdout with the container logs; the file sink
+      # is off so no second, never-pruned copy accumulates on the data volume.
+      # Open WebUI hands the loggers named in AUDIT_UVICORN_LOGGER_NAMES
+      # (default uvicorn.access) a handler into its own log at startup, which
+      # would undo --no-access-log (command above). Empty names only the root
+      # logger, which has that handler already.
       AUDIT_LOG_LEVEL: METADATA
       ENABLE_AUDIT_STDOUT: true
       ENABLE_AUDIT_LOGS_FILE: false
-      AUDIT_EXCLUDED_PATHS: ""
+      AUDIT_EXCLUDED_PATHS: "/terminals"
       ENABLE_AUDIT_GET_REQUESTS: true
+      AUDIT_UVICORN_LOGGER_NAMES: ""
       # Signed user attribution at the router (vllm-service docs/audit.md).
       # With a secret, every call Open WebUI makes to the inference endpoint
       # carries one HS256 token (X-OpenWebUI-User-Jwt) naming the user; the
@@ -184,8 +197,11 @@ services:
       # the upstream default, pinned like the telemetry opt-outs below).
       # The enforcement is edge-guard's: upstream checks the upload
       # permission only in its UI and lets admins past the knowledge one,
-      # so the guard refuses those endpoints for everyone.
-      USER_PERMISSIONS_CHAT_FILE_UPLOAD: false
+      # so the guard refuses those endpoints for everyone. The file upload
+      # permission alone is on: the pinned UI asks for it before attaching
+      # into workbench as well (§ Workbench), and an attachment headed for
+      # Open WebUI's own store still meets the guard's 403.
+      USER_PERMISSIONS_CHAT_FILE_UPLOAD: true
       USER_PERMISSIONS_CHAT_WEB_UPLOAD: false
       USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS: false
       USER_PERMISSIONS_FEATURES_MEMORIES: false
@@ -196,13 +212,14 @@ services:
       # deleted by the retention service with the chats' period.
       ENABLE_NOTES: false
       USER_PERMISSIONS_FEATURES_NOTES: false
-      # The retention period, announced to everyone: chats are deleted that
-      # many days after they were started (the retention service). The text
-      # takes the period from the retention service's variable, and so does
-      # its id: the UI remembers a dismissed banner by id, so a changed
-      # period is announced again. German via the banner's i18n (the UI's
-      # locale code).
-      WEBUI_BANNERS: '[{"id":"retention-period-${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365}","type":"info","title":"","content":"Chats are deleted automatically ${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365} days after they were started.","dismissible":true,"timestamp":1793836800,"i18n":{"de-DE":{"content":"Chats werden ${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365} Tage nach ihrem Beginn automatisch gelöscht."}}}]'
+      # The retention periods, announced to everyone: chats are deleted that
+      # many days after they were started (the retention service), and
+      # workspace files that many days after they were added (workbench).
+      # Each text takes its period from the deleting service's variable, and
+      # so does its id: the UI remembers a dismissed banner by id, so a
+      # changed period is announced again. German via the banner's i18n (the
+      # UI's locale code).
+      WEBUI_BANNERS: '[{"id":"retention-period-${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365}","type":"info","title":"","content":"Chats are deleted automatically ${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365} days after they were started.","dismissible":true,"timestamp":1793836800,"i18n":{"de-DE":{"content":"Chats werden ${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365} Tage nach ihrem Beginn automatisch gelöscht."}}},{"id":"workspace-period-${WORKBENCH_RETENTION_DAYS:-7}","type":"info","title":"","content":"Files in the workspace are deleted ${WORKBENCH_RETENTION_DAYS:-7} days after they were added.","dismissible":true,"timestamp":1794700800,"i18n":{"de-DE":{"content":"Dateien im Arbeitsbereich werden ${WORKBENCH_RETENTION_DAYS:-7} Tage nach dem Hinzufügen gelöscht."}}}]'
       # No message ratings: rating an answer stores a full copy of the chat
       # with the rating (the feedback's `snapshot`). The copy outlives the
       # chat, and admins could read it through the evaluation routes whatever
@@ -214,18 +231,39 @@ services:
       # backend runs with exec, without a sandbox and with the whole database
       # in reach (utils/plugin.py); the code interpreter and code execution run
       # in the user's browser and keep its files in IndexedDB, out of reach of
-      # the retention service. No tool server is connected, so they are off
-      # too. Open WebUI enforces ENABLE_TOOLS and ENABLE_FUNCTIONS where the
-      # code is loaded (utils/plugin.py); edge-guard refuses the writes to the
-      # tools and functions routers as a second layer. Automations and
-      # sub-agents are pinned at their upstream default, off.
+      # the retention service. Code runs only in workbench (below), the one
+      # tool server. Open WebUI enforces ENABLE_TOOLS and ENABLE_FUNCTIONS
+      # where the code is loaded (utils/plugin.py); edge-guard refuses the
+      # writes to the tools and functions routers as a second layer, and to
+      # the code execution settings, which would switch the last two on at
+      # runtime. Automations and sub-agents are pinned at their upstream
+      # default, off.
       ENABLE_TOOLS: false
       ENABLE_FUNCTIONS: false
-      ENABLE_TOOL_SERVERS: false
       ENABLE_CODE_INTERPRETER: false
       ENABLE_CODE_EXECUTION: false
       USER_PERMISSIONS_FEATURES_AUTOMATIONS: false
       ENABLE_SUBAGENTS: false
+      # Workbench (CLAUDE.md § Workbench), the federation's tool tier: one
+      # terminal server, reached with a bearer key over workbench-net, for
+      # every user. Chat attachments go into its workspace through Open
+      # WebUI's terminal proxy (chat_uploads: filesystem), not into Open
+      # WebUI's stores. Tool servers are on only with the key: unset, the
+      # switch is empty, which upstream reads as off, and Open WebUI runs as
+      # before (the workspace banner still shows). The connection comes from
+      # here alone (ENABLE_PERSISTENT_CONFIG is off; edge-guard refuses the
+      # configuration routes for tool and terminal servers, and the
+      # configuration import), and it is the only one: edge-guard refuses
+      # Tether, which would add a terminal of a user's own.
+      ENABLE_TOOL_SERVERS: ${OPEN_WEBUI_WORKBENCH_KEY:+true}
+      TERMINAL_SERVER_CONNECTIONS: '[{"id":"workbench","name":"Workbench","enabled":true,"url":"${WORKBENCH_URL:-http://workbench-api:8000}","path":"/openapi.json","key":"${OPEN_WEBUI_WORKBENCH_KEY:-}","auth_type":"bearer","config":{"chat_uploads":"filesystem","access_grants":[{"principal_type":"user","principal_id":"*","permission":"read"}]}}]'
+      # No tool servers of a user's own, added from the browser.
+      USER_PERMISSIONS_FEATURES_DIRECT_TOOL_SERVERS: false
+      # How long Open WebUI waits for a tool call (upstream: no limit). Longer
+      # than workbench can take to answer one: queue wait 60 s + wall time
+      # 120 s + the 300 s it waits for the executor's answer after that
+      # (workbench docs/configuration.md).
+      AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER: "480"
       # The image already sets these; pinned here so an upstream default
       # change cannot switch telemetry back on.
       SCARF_NO_ANALYTICS: true
@@ -256,6 +294,9 @@ services:
       edge-net:
         aliases:
           - open-webui
+      # Open WebUI calls workbench's api here (WORKBENCH_URL). No alias:
+      # nothing on workbench-net calls Open WebUI.
+      workbench-net: {}
 
   ##########################################################
   # edge-guard — the only listener in open-webui's network
@@ -378,3 +419,6 @@ networks:
   edge-net:
     external: true
     name: ${EDGE_NET:-edge-net}
+  workbench-net:
+    external: true
+    name: ${WORKBENCH_NET:-workbench-net}

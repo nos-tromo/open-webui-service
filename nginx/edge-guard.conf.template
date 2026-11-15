@@ -78,6 +78,42 @@ map "$request_method $uri" $owui_code {
     "~*^(POST|PUT|PATCH) /api/v1/(tools|functions)(/|$)"     1;
 }
 
+# Writing the tool and terminal server configuration is refused for everyone,
+# admins included. The one connection, workbench, comes from .env
+# (TERMINAL_SERVER_CONNECTIONS; ENABLE_PERSISTENT_CONFIG is off), but these
+# routes would replace it until the next restart. Their verify routes, the
+# orchestrator proxies (policy, lifecycle, refresh) and the OAuth client
+# registration for tool servers would make the server call any URL given to
+# them. Reading passes. Matched like the intake above.
+map "$request_method $uri" $owui_toolconfig {
+    default                                                                            0;
+    "~*^(POST|PUT|PATCH|DELETE) /api/v1/configs/(tool_servers|terminal_servers)(/|$)" 1;
+    "~*^(POST|PUT|PATCH|DELETE) /api/v1/configs/oauth/clients(/|$)"                    1;
+}
+
+# Settings that .env decides are not written at runtime, by anyone, admins
+# included. With ENABLE_PERSISTENT_CONFIG off a write lasts only until the next
+# restart, but takes effect at once: the import writes any key it is given,
+# the workbench connection among them; code_execution switches code execution
+# and the code interpreter on; connections switches direct connections and
+# direct tool server integrations on. Reading passes, as does the export.
+# Matched like the intake above.
+map "$request_method $uri" $owui_config {
+    default                                                                              0;
+    "~*^(POST|PUT|PATCH|DELETE) /api/v1/configs/(import|code_execution|connections)(/|$)" 1;
+}
+
+# Tether is refused for everyone, admins included, whatever the method. With
+# tool servers on (for workbench), a user who opens its WebSocket
+# (/api/v1/tether/connect) with a renewable session is offered a terminal of
+# their own beside workbench, outside its sandbox, audit and retention. The
+# web UI calls it only inside the Tether desktop app. Matched like the intake
+# above.
+map "$request_method $uri" $owui_tether {
+    default                                       0;
+    "~*^[A-Z]+ /api/v1/tether(/|$)"               1;
+}
+
 server {
     listen 8080;
     server_tokens off;
@@ -136,6 +172,39 @@ server {
     location @code_refused {
         default_type application/json;
         return 403 '{"detail":"Tools and functions cannot be created or changed in this deployment."}';
+    }
+
+    # Refused tool and terminal server configuration writes (the map above)
+    # the same way; 422 is their internal hand-off.
+    error_page 422 = @toolconfig_refused;
+    if ($owui_toolconfig) {
+        return 422;
+    }
+    location @toolconfig_refused {
+        default_type application/json;
+        return 403 '{"detail":"Tool and terminal servers are configured in .env in this deployment."}';
+    }
+
+    # Refused settings writes (the map above) the same way; 423 is their
+    # internal hand-off.
+    error_page 423 = @config_refused;
+    if ($owui_config) {
+        return 423;
+    }
+    location @config_refused {
+        default_type application/json;
+        return 403 '{"detail":"Configuration is set in .env in this deployment."}';
+    }
+
+    # Refused Tether (the map above) the same way; 424 is its internal
+    # hand-off.
+    error_page 424 = @tether_refused;
+    if ($owui_tether) {
+        return 424;
+    }
+    location @tether_refused {
+        default_type application/json;
+        return 403 '{"detail":"Only the workbench connection from .env is offered in this deployment."}';
     }
 
     location / {

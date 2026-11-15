@@ -124,6 +124,218 @@ class CodeWritesTest(unittest.TestCase):
 
 
 @unittest.skipUnless(TEMPLATE.is_file(), "needs the repo's nginx/")
+class ToolConfigWritesTest(unittest.TestCase):
+    """Tool and terminal servers come from .env; writing their configuration is refused for everyone."""
+
+    def setUp(self) -> None:
+        """Parse the map that flags those requests."""
+        self.text = TEMPLATE.read_text(encoding="utf-8")
+        self.entries, self.default = parse_map(self.text, "owui_toolconfig")
+
+    def flagged(self, request: str) -> bool:
+        """Whether the request is refused."""
+        return evaluate(self.entries, self.default, request) == "1"
+
+    def test_tool_server_config_writes_are_refused(self) -> None:
+        """Every write under both routes, with verify and the orchestrator proxies, which call a URL given to them."""
+        for request in (
+            "POST /api/v1/configs/tool_servers",
+            "POST /api/v1/configs/tool_servers/verify",
+            "POST /api/v1/configs/terminal_servers",
+            "POST /api/v1/configs/terminal_servers/verify",
+            "POST /api/v1/configs/terminal_servers/policy",
+            "POST /api/v1/configs/terminal_servers/lifecycle",
+            "POST /api/v1/configs/terminal_servers/refresh",
+            "PUT /api/v1/configs/terminal_servers",
+            "PATCH /api/v1/configs/tool_servers",
+            "DELETE /api/v1/configs/terminal_servers",
+            "post /API/V1/Configs/Terminal_Servers/verify",
+            "POST /api/v1/configs/oauth/clients/register",
+        ):
+            with self.subTest(request=request):
+                self.assertTrue(self.flagged(request))
+
+    def test_tool_server_config_reads_pass(self) -> None:
+        """Reading the configuration and writing other settings still pass."""
+        for request in (
+            "GET /api/v1/configs/tool_servers",
+            "GET /api/v1/configs/terminal_servers",
+            "POST /api/v1/configs/banners",
+            "POST /api/v1/configs/connections",
+            "POST /api/v1/configs/tool_serversx",
+            "POST /api/v1/configs/oauth/clientsx",
+        ):
+            with self.subTest(request=request):
+                self.assertFalse(self.flagged(request))
+
+    def test_a_flagged_request_answers_403(self) -> None:
+        """The flag leads to a 403 with a JSON detail, by a hand-off code of its own."""
+        handoff = re.search(r"if \(\$owui_toolconfig\) \{\s*return (\d{3});\s*\}", self.text)
+        self.assertIsNotNone(handoff)
+        assert handoff is not None
+        location = re.search(
+            r"error_page " + handoff.group(1) + r" = @(\w+);.*?location @\1 \{\s*default_type application/json;"
+            r"\s*return 403 '\{\"detail\":\"([^\"]+)\"\}';",
+            self.text,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(location)
+        assert location is not None
+        self.assertEqual(location.group(2), "Tool and terminal servers are configured in .env in this deployment.")
+        codes = re.findall(r"error_page (\d{3}) = @", self.text)
+        self.assertEqual(len(codes), len(set(codes)))
+
+    def test_the_terminal_proxy_passes_every_refusal(self) -> None:
+        """Chat attachments and the file browser reach workbench through the terminal proxy, past every map."""
+        variables = re.findall(r'^map "\$request_method \$uri" \$(\w+)', self.text, re.MULTILINE)
+        self.assertEqual(
+            variables, ["owui_intake", "owui_rating", "owui_code", "owui_toolconfig", "owui_config", "owui_tether"]
+        )
+        maps = [parse_map(self.text, variable) for variable in variables]
+        for request in (
+            "POST /api/v1/terminals/workbench/files/upload",
+            "POST /api/v1/terminals/workbench/chats/example/files/upload",
+            "GET /api/v1/terminals/workbench/files/view",
+            "POST /api/v1/terminals/workbench/tools/list_files",
+        ):
+            for entries, default in maps:
+                with self.subTest(request=request):
+                    self.assertEqual(evaluate(entries, default, request), "0")
+
+
+@unittest.skipUnless(TEMPLATE.is_file(), "needs the repo's nginx/")
+class ConfigWritesTest(unittest.TestCase):
+    """Settings routes that would override .env at runtime are refused for everyone; reading them passes."""
+
+    def setUp(self) -> None:
+        """Parse the map that flags those writes."""
+        self.text = TEMPLATE.read_text(encoding="utf-8")
+        self.entries, self.default = parse_map(self.text, "owui_config")
+
+    def flagged(self, request: str) -> bool:
+        """Whether the request is refused."""
+        return evaluate(self.entries, self.default, request) == "1"
+
+    def test_the_config_import_is_refused(self) -> None:
+        """Every write to the import route, which writes any key, however it is spelled."""
+        for request in (
+            "POST /api/v1/configs/import",
+            "POST /api/v1/configs/import/",
+            "PUT /api/v1/configs/import",
+            "post /API/V1/Configs/Import",
+        ):
+            with self.subTest(request=request):
+                self.assertTrue(self.flagged(request))
+
+    def test_code_execution_and_connections_writes_are_refused(self) -> None:
+        """They would switch code execution, the code interpreter and direct connections on until a restart."""
+        for route in ("code_execution", "connections"):
+            for method in ("POST", "PUT", "PATCH", "DELETE"):
+                with self.subTest(request=f"{method} {route}"):
+                    self.assertTrue(self.flagged(f"{method} /api/v1/configs/{route}"))
+        for request in ("post /API/V1/Configs/Code_Execution", "POST /api/v1/configs/connections/"):
+            with self.subTest(request=request):
+                self.assertTrue(self.flagged(request))
+
+    def test_reads_and_other_settings_pass(self) -> None:
+        """Reading the configuration, these routes included, and the other settings routes pass."""
+        for request in (
+            "GET /api/v1/configs/export",
+            "GET /api/v1/configs/code_execution",
+            "GET /api/v1/configs/connections",
+            "POST /api/v1/configs/banners",
+            "POST /api/v1/configs/importx",
+            "POST /api/v1/configs/connectionsx",
+        ):
+            with self.subTest(request=request):
+                self.assertFalse(self.flagged(request))
+
+    def test_a_flagged_request_answers_403(self) -> None:
+        """The flag leads to a 403 with a JSON detail, by a hand-off code of its own."""
+        handoff = re.search(r"if \(\$owui_config\) \{\s*return (\d{3});\s*\}", self.text)
+        self.assertIsNotNone(handoff)
+        assert handoff is not None
+        location = re.search(
+            r"error_page " + handoff.group(1) + r" = @(\w+);.*?location @\1 \{\s*default_type application/json;"
+            r"\s*return 403 '\{\"detail\":\"([^\"]+)\"\}';",
+            self.text,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(location)
+        assert location is not None
+        self.assertEqual(location.group(2), "Configuration is set in .env in this deployment.")
+
+
+@unittest.skipUnless(TEMPLATE.is_file(), "needs the repo's nginx/")
+class TetherTest(unittest.TestCase):
+    """Tether, which would add a terminal of a user's own beside workbench, is refused for everyone."""
+
+    def setUp(self) -> None:
+        """Parse the map that flags Tether."""
+        self.text = TEMPLATE.read_text(encoding="utf-8")
+        self.entries, self.default = parse_map(self.text, "owui_tether")
+
+    def flagged(self, request: str) -> bool:
+        """Whether the request is refused."""
+        return evaluate(self.entries, self.default, request) == "1"
+
+    def test_every_tether_route_is_refused(self) -> None:
+        """Its WebSocket and anything else under /api/v1/tether, whatever the method or spelling."""
+        for request in (
+            "GET /api/v1/tether/connect",
+            "GET /api/v1/tether",
+            "GET /api/v1/tether/",
+            "POST /api/v1/tether/connect",
+            "DELETE /api/v1/tether/connect",
+            "OPTIONS /api/v1/tether/connect",
+            "get /API/V1/Tether/Connect",
+        ):
+            with self.subTest(request=request):
+                self.assertTrue(self.flagged(request))
+
+    def test_neighbouring_routes_pass(self) -> None:
+        """Renewable sessions stay mintable (a separate decision), and the terminals list and proxy pass."""
+        for request in (
+            "GET /api/v1/tetherx",
+            "POST /api/v1/auths/sessions",
+            "GET /api/v1/auths/sessions",
+            "GET /api/v1/terminals/",
+            "POST /api/v1/terminals/workbench/files/upload",
+        ):
+            with self.subTest(request=request):
+                self.assertFalse(self.flagged(request))
+
+    def test_a_flagged_request_answers_403(self) -> None:
+        """The flag leads to a 403 with a JSON detail, by a hand-off code of its own."""
+        handoff = re.search(r"if \(\$owui_tether\) \{\s*return (\d{3});\s*\}", self.text)
+        self.assertIsNotNone(handoff)
+        assert handoff is not None
+        location = re.search(
+            r"error_page " + handoff.group(1) + r" = @(\w+);.*?location @\1 \{\s*default_type application/json;"
+            r"\s*return 403 '\{\"detail\":\"([^\"]+)\"\}';",
+            self.text,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(location)
+        assert location is not None
+        self.assertEqual(location.group(2), "Only the workbench connection from .env is offered in this deployment.")
+        codes = re.findall(r"error_page (\d{3}) = @", self.text)
+        self.assertEqual(len(codes), len(set(codes)))
+
+
+@unittest.skipUnless(TEMPLATE.is_file(), "needs the repo's nginx/")
+class IntakeTest(unittest.TestCase):
+    """Uploads into Open WebUI's own stores are refused whatever the UI offers."""
+
+    def test_uploads_into_open_webui_are_refused(self) -> None:
+        """With the upload permission on, an attachment outside workbench still meets edge-guard's refusal."""
+        entries, default = parse_map(TEMPLATE.read_text(encoding="utf-8"), "owui_intake")
+        for request in ("POST /api/v1/files/", "POST /api/v1/files", "PUT /api/v1/files/example/data/content/update"):
+            with self.subTest(request=request):
+                self.assertEqual(evaluate(entries, default, request), "1")
+
+
+@unittest.skipUnless(TEMPLATE.is_file(), "needs the repo's nginx/")
 class ParserTest(unittest.TestCase):
     """The parser reads the existing maps the way nginx does."""
 
