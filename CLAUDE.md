@@ -149,18 +149,22 @@ edge-guard answers whatever tries.
 - **Configuration only from `.env`.** Besides `ENABLE_PERSISTENT_CONFIG=false`,
   edge-guard refuses, with `403` (JSON `detail`) and for every account,
   `POST`/`PUT`/`PATCH`/`DELETE` under `/api/v1/configs/tool_servers` and
-  `/api/v1/configs/terminal_servers`, matched like the intake routes. Those
-  writes would replace the connection until the next restart (with
-  persistence off, `Config.upsert` writes the in-memory defaults,
-  `models/config.py`), and the verify routes and the orchestrator proxies
-  (`…/terminal_servers/policy`, `/lifecycle`, `/refresh`) make the server call
-  any URL in the request. Reading passes.
+  `/api/v1/configs/terminal_servers` and `/api/v1/configs/oauth/clients`,
+  matched like the intake routes. Those writes would replace the connection
+  until the next restart (with persistence off, `Config.upsert` writes the
+  in-memory defaults, `models/config.py`), and the verify routes, the
+  orchestrator proxies (`…/terminal_servers/policy`, `/lifecycle`,
+  `/refresh`) and the OAuth client registration for tool servers make the
+  server call any URL in the request. Reading passes. It refuses the
+  configuration import (`/api/v1/configs/import`) the same way, with its own
+  detail: the import writes any key, `terminal_server.connections` among them
+  (verified: it re-pointed the proxy at once), and with persistence off it has
+  no lasting use; the export still passes. No other route in the pinned
+  image's `routers/configs.py` writes either connection list.
   `USER_PERMISSIONS_FEATURES_DIRECT_TOOL_SERVERS=false` (the upstream default,
   pinned) keeps users from adding tool servers of their own: the pinned image
   drops a non-admin's `tool_servers` from a chat request without it
-  (`main.py`). Not covered: `POST /api/v1/configs/import` writes any config
-  key, `terminal_server.connections` included, so an admin can still replace
-  the connection there until the next restart (verified).
+  (`main.py`).
 - **Audit.** `AUDIT_EXCLUDED_PATHS: "/terminals"`: the pinned image skips what
   `^/api(?:/v1)?/(terminals)\b` matches (`utils/audit.py`), that is the
   terminal proxy, whose URLs carry file names in their query

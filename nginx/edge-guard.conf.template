@@ -81,12 +81,23 @@ map "$request_method $uri" $owui_code {
 # Writing the tool and terminal server configuration is refused for everyone,
 # admins included. The one connection, workbench, comes from .env
 # (TERMINAL_SERVER_CONNECTIONS; ENABLE_PERSISTENT_CONFIG is off), but these
-# routes would replace it until the next restart. Their verify routes and the
-# orchestrator proxies (policy, lifecycle, refresh) would make the server call
-# any URL given to them. Reading passes. Matched like the intake above.
+# routes would replace it until the next restart. Their verify routes, the
+# orchestrator proxies (policy, lifecycle, refresh) and the OAuth client
+# registration for tool servers would make the server call any URL given to
+# them. Reading passes. Matched like the intake above.
 map "$request_method $uri" $owui_toolconfig {
     default                                                                            0;
     "~*^(POST|PUT|PATCH|DELETE) /api/v1/configs/(tool_servers|terminal_servers)(/|$)" 1;
+    "~*^(POST|PUT|PATCH|DELETE) /api/v1/configs/oauth/clients(/|$)"                    1;
+}
+
+# The configuration import is refused for everyone, admins included. It writes
+# any key it is given, the workbench connection among them, and with
+# ENABLE_PERSISTENT_CONFIG off it lasts only until the next restart, so it has
+# no use here. The export still passes. Matched like the intake above.
+map "$request_method $uri" $owui_configimport {
+    default                                                       0;
+    "~*^(POST|PUT|PATCH|DELETE) /api/v1/configs/import(/|$)"      1;
 }
 
 server {
@@ -158,6 +169,17 @@ server {
     location @toolconfig_refused {
         default_type application/json;
         return 403 '{"detail":"Tool and terminal servers are configured in .env in this deployment."}';
+    }
+
+    # The refused configuration import (the map above) the same way; 423 is
+    # its internal hand-off.
+    error_page 423 = @configimport_refused;
+    if ($owui_configimport) {
+        return 423;
+    }
+    location @configimport_refused {
+        default_type application/json;
+        return 403 '{"detail":"Configuration is set in .env in this deployment."}';
     }
 
     location / {

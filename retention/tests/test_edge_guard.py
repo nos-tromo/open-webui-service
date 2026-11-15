@@ -150,6 +150,7 @@ class ToolConfigWritesTest(unittest.TestCase):
             "PATCH /api/v1/configs/tool_servers",
             "DELETE /api/v1/configs/terminal_servers",
             "post /API/V1/Configs/Terminal_Servers/verify",
+            "POST /api/v1/configs/oauth/clients/register",
         ):
             with self.subTest(request=request):
                 self.assertTrue(self.flagged(request))
@@ -162,6 +163,7 @@ class ToolConfigWritesTest(unittest.TestCase):
             "POST /api/v1/configs/banners",
             "POST /api/v1/configs/connections",
             "POST /api/v1/configs/tool_serversx",
+            "POST /api/v1/configs/oauth/clientsx",
         ):
             with self.subTest(request=request):
                 self.assertFalse(self.flagged(request))
@@ -186,7 +188,7 @@ class ToolConfigWritesTest(unittest.TestCase):
     def test_the_terminal_proxy_passes_every_refusal(self) -> None:
         """Chat attachments and the file browser reach workbench through the terminal proxy, past every map."""
         variables = re.findall(r'^map "\$request_method \$uri" \$(\w+)', self.text, re.MULTILINE)
-        self.assertEqual(variables, ["owui_intake", "owui_rating", "owui_code", "owui_toolconfig"])
+        self.assertEqual(variables, ["owui_intake", "owui_rating", "owui_code", "owui_toolconfig", "owui_configimport"])
         maps = [parse_map(self.text, variable) for variable in variables]
         for request in (
             "POST /api/v1/terminals/workbench/files/upload",
@@ -197,6 +199,56 @@ class ToolConfigWritesTest(unittest.TestCase):
             for entries, default in maps:
                 with self.subTest(request=request):
                     self.assertEqual(evaluate(entries, default, request), "0")
+
+
+@unittest.skipUnless(TEMPLATE.is_file(), "needs the repo's nginx/")
+class ConfigImportTest(unittest.TestCase):
+    """The configuration import, which writes any key, the workbench connection among them, is refused for everyone."""
+
+    def setUp(self) -> None:
+        """Parse the map that flags the import."""
+        self.text = TEMPLATE.read_text(encoding="utf-8")
+        self.entries, self.default = parse_map(self.text, "owui_configimport")
+
+    def flagged(self, request: str) -> bool:
+        """Whether the request is refused."""
+        return evaluate(self.entries, self.default, request) == "1"
+
+    def test_the_config_import_is_refused(self) -> None:
+        """Every write to the import route, however it is spelled."""
+        for request in (
+            "POST /api/v1/configs/import",
+            "POST /api/v1/configs/import/",
+            "PUT /api/v1/configs/import",
+            "post /API/V1/Configs/Import",
+        ):
+            with self.subTest(request=request):
+                self.assertTrue(self.flagged(request))
+
+    def test_the_export_and_other_settings_pass(self) -> None:
+        """Reading the configuration and the other settings routes pass."""
+        for request in (
+            "GET /api/v1/configs/export",
+            "POST /api/v1/configs/banners",
+            "POST /api/v1/configs/importx",
+        ):
+            with self.subTest(request=request):
+                self.assertFalse(self.flagged(request))
+
+    def test_a_flagged_request_answers_403(self) -> None:
+        """The flag leads to a 403 with a JSON detail, by a hand-off code of its own."""
+        handoff = re.search(r"if \(\$owui_configimport\) \{\s*return (\d{3});\s*\}", self.text)
+        self.assertIsNotNone(handoff)
+        assert handoff is not None
+        location = re.search(
+            r"error_page " + handoff.group(1) + r" = @(\w+);.*?location @\1 \{\s*default_type application/json;"
+            r"\s*return 403 '\{\"detail\":\"([^\"]+)\"\}';",
+            self.text,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(location)
+        assert location is not None
+        self.assertEqual(location.group(2), "Configuration is set in .env in this deployment.")
 
 
 @unittest.skipUnless(TEMPLATE.is_file(), "needs the repo's nginx/")

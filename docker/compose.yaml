@@ -250,7 +250,7 @@ services:
       # switch is empty, which upstream reads as off, and Open WebUI runs as
       # before. The connection comes from here alone (ENABLE_PERSISTENT_CONFIG
       # is off; edge-guard refuses the configuration routes for tool and
-      # terminal servers).
+      # terminal servers, and the configuration import).
       ENABLE_TOOL_SERVERS: ${OPEN_WEBUI_WORKBENCH_KEY:+true}
       TERMINAL_SERVER_CONNECTIONS: '[{"id":"workbench","name":"Workbench","enabled":true,"url":"${WORKBENCH_URL:-http://workbench-api:8000}","path":"/openapi.json","key":"${OPEN_WEBUI_WORKBENCH_KEY:-}","auth_type":"bearer","config":{"chat_uploads":"filesystem","access_grants":[{"principal_type":"user","principal_id":"*","permission":"read"}]}}]'
       # No tool servers of a user's own, added from the browser.
