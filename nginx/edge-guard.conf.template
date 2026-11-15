@@ -103,6 +103,17 @@ map "$request_method $uri" $owui_config {
     "~*^(POST|PUT|PATCH|DELETE) /api/v1/configs/(import|code_execution|connections)(/|$)" 1;
 }
 
+# Tether is refused for everyone, admins included, whatever the method. With
+# tool servers on (for workbench), a user who opens its WebSocket
+# (/api/v1/tether/connect) with a renewable session is offered a terminal of
+# their own beside workbench, outside its sandbox, audit and retention. The
+# web UI calls it only inside the Tether desktop app. Matched like the intake
+# above.
+map "$request_method $uri" $owui_tether {
+    default                                       0;
+    "~*^[A-Z]+ /api/v1/tether(/|$)"               1;
+}
+
 server {
     listen 8080;
     server_tokens off;
@@ -183,6 +194,17 @@ server {
     location @config_refused {
         default_type application/json;
         return 403 '{"detail":"Configuration is set in .env in this deployment."}';
+    }
+
+    # Refused Tether (the map above) the same way; 424 is its internal
+    # hand-off.
+    error_page 424 = @tether_refused;
+    if ($owui_tether) {
+        return 424;
+    }
+    location @tether_refused {
+        default_type application/json;
+        return 403 '{"detail":"Only the workbench connection from .env is offered in this deployment."}';
     }
 
     location / {

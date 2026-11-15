@@ -188,7 +188,9 @@ class ToolConfigWritesTest(unittest.TestCase):
     def test_the_terminal_proxy_passes_every_refusal(self) -> None:
         """Chat attachments and the file browser reach workbench through the terminal proxy, past every map."""
         variables = re.findall(r'^map "\$request_method \$uri" \$(\w+)', self.text, re.MULTILINE)
-        self.assertEqual(variables, ["owui_intake", "owui_rating", "owui_code", "owui_toolconfig", "owui_config"])
+        self.assertEqual(
+            variables, ["owui_intake", "owui_rating", "owui_code", "owui_toolconfig", "owui_config", "owui_tether"]
+        )
         maps = [parse_map(self.text, variable) for variable in variables]
         for request in (
             "POST /api/v1/terminals/workbench/files/upload",
@@ -262,6 +264,63 @@ class ConfigWritesTest(unittest.TestCase):
         self.assertIsNotNone(location)
         assert location is not None
         self.assertEqual(location.group(2), "Configuration is set in .env in this deployment.")
+
+
+@unittest.skipUnless(TEMPLATE.is_file(), "needs the repo's nginx/")
+class TetherTest(unittest.TestCase):
+    """Tether, which would add a terminal of a user's own beside workbench, is refused for everyone."""
+
+    def setUp(self) -> None:
+        """Parse the map that flags Tether."""
+        self.text = TEMPLATE.read_text(encoding="utf-8")
+        self.entries, self.default = parse_map(self.text, "owui_tether")
+
+    def flagged(self, request: str) -> bool:
+        """Whether the request is refused."""
+        return evaluate(self.entries, self.default, request) == "1"
+
+    def test_every_tether_route_is_refused(self) -> None:
+        """Its WebSocket and anything else under /api/v1/tether, whatever the method or spelling."""
+        for request in (
+            "GET /api/v1/tether/connect",
+            "GET /api/v1/tether",
+            "GET /api/v1/tether/",
+            "POST /api/v1/tether/connect",
+            "DELETE /api/v1/tether/connect",
+            "OPTIONS /api/v1/tether/connect",
+            "get /API/V1/Tether/Connect",
+        ):
+            with self.subTest(request=request):
+                self.assertTrue(self.flagged(request))
+
+    def test_neighbouring_routes_pass(self) -> None:
+        """Renewable sessions stay mintable (a separate decision), and the terminals list and proxy pass."""
+        for request in (
+            "GET /api/v1/tetherx",
+            "POST /api/v1/auths/sessions",
+            "GET /api/v1/auths/sessions",
+            "GET /api/v1/terminals/",
+            "POST /api/v1/terminals/workbench/files/upload",
+        ):
+            with self.subTest(request=request):
+                self.assertFalse(self.flagged(request))
+
+    def test_a_flagged_request_answers_403(self) -> None:
+        """The flag leads to a 403 with a JSON detail, by a hand-off code of its own."""
+        handoff = re.search(r"if \(\$owui_tether\) \{\s*return (\d{3});\s*\}", self.text)
+        self.assertIsNotNone(handoff)
+        assert handoff is not None
+        location = re.search(
+            r"error_page " + handoff.group(1) + r" = @(\w+);.*?location @\1 \{\s*default_type application/json;"
+            r"\s*return 403 '\{\"detail\":\"([^\"]+)\"\}';",
+            self.text,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(location)
+        assert location is not None
+        self.assertEqual(location.group(2), "Only the workbench connection from .env is offered in this deployment.")
+        codes = re.findall(r"error_page (\d{3}) = @", self.text)
+        self.assertEqual(len(codes), len(set(codes)))
 
 
 @unittest.skipUnless(TEMPLATE.is_file(), "needs the repo's nginx/")

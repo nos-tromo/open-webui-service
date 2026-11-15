@@ -90,16 +90,21 @@ Open WebUI connects to workbench, the federation's tool tier, as its one
 terminal server over the external `workbench-net`. The model reads, writes and
 runs code on the user's files there, in workbench's sandbox, and a chat with
 Workbench selected as its terminal sends its attachments into the user's
-workspace, never into Open WebUI (without it, edge-guard refuses the upload).
-That connection, from `.env`, is the only one:
-edge-guard refuses the admin routes that would change tool or terminal
-servers, and users cannot add their own. A second banner tells every user that
-workspace files are deleted `WORKBENCH_RETENTION_DAYS` days after they were
-added (default 7). Since the terminal proxy's URLs carry file names, Open WebUI
-leaves them out of its audit log and runs without uvicorn's access log;
+workspace, never into Open WebUI. Without it, edge-guard refuses the upload,
+except in a temporary chat: there the browser sends a PDF's or text file's text
+to the model inline with the message, like pasted text, and nothing is stored
+(a temporary chat keeps no history, and workbench records nothing of it;
+`USER_PERMISSIONS_CHAT_TEMPORARY=false` would close that path, as the owner's
+option). That connection, from `.env`, is the only one. edge-guard refuses the
+admin routes that would change tool or terminal servers. Users cannot add their
+own either: direct tool servers stay off, and edge-guard refuses Tether, which
+would give a user a terminal of their own. A second banner tells every user
+that workspace files are deleted `WORKBENCH_RETENTION_DAYS` days after they
+were added (default 7). Since the terminal proxy's URLs carry file names, Open
+WebUI leaves them out of its audit log and runs without uvicorn's access log;
 workbench records each access itself, by file id. Without the key there are no
-tool servers, and Open WebUI runs as before. Details:
-[`CLAUDE.md`](./CLAUDE.md) § Workbench.
+tool servers and Open WebUI runs as before, except that the workspace banner
+still shows. Details: [`CLAUDE.md`](./CLAUDE.md) § Workbench.
 
 ## Operations
 

@@ -44,11 +44,11 @@ To run Open WebUI usefully, `inference-net` must exist and an upstream OpenAI-co
 
 **Signed user attribution at the router.** The router (`vllm-service`) records one `ai_call` event per model call, but every caller shares its master key, so on its own it cannot name the person behind an Open WebUI call. With `OPEN_WEBUI_FORWARD_JWT_SECRET` set, `compose.yaml` turns on `ENABLE_FORWARD_USER_INFO_HEADERS` and passes the value as `FORWARD_USER_INFO_HEADER_JWT_SECRET`. Every call to the endpoint then carries one HS256 token in `X-OpenWebUI-User-Jwt` (`sub`, `email`, `name`, `role`, `iss: open-webui`, `exp`); the router, given the same value as `AUDIT_OPENWEBUI_JWT_SECRET`, verifies it and records the e-mail as the call's actor (vllm-service `docs/audit.md`). The token lives 60 s (`FORWARD_USER_INFO_HEADER_JWT_EXPIRES_SECONDS`, upstream default 300): it is minted per call and checked as the call arrives, so a short lifetime only narrows the replay window. The secret itself switches forwarding on (`${OPEN_WEBUI_FORWARD_JWT_SECRET:+true}`), never without it: forwarding with no secret sends the user's name, id, e-mail and role as plain `X-OpenWebUI-User-*` headers, which any caller on `inference-net` could send too. Unset, nothing is forwarded and the router names no Open WebUI user. The secret is used for nothing else — not `WEBUI_SECRET_KEY` (the session key) and not the endpoint's API key; whoever holds it could mis-attribute router events, not mint Open WebUI sessions. Rotation: change it in both `.env` files and restart both stacks. Verified against the pinned image's `env.py` and `utils/headers.py`; re-check on an image bump.
 
-**No content intake.** Open WebUI is a chat UI here, not a document store: documents and personal facts belong in the apps that audit what they store. Chat file and web uploads, knowledge bases, memories and notes are therefore off (notes: § Retention). `compose.yaml` sets `USER_PERMISSIONS_CHAT_WEB_UPLOAD=false`, `USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS=false` (already the upstream default, pinned), `USER_PERMISSIONS_FEATURES_MEMORIES=false` and `ENABLE_MEMORIES=false`; with `ENABLE_PERSISTENT_CONFIG=false` these load from env on every boot. The flags only hide the controls, with one exception: `ENABLE_MEMORIES=false` the server enforces itself. The chat file upload permission is on (`USER_PERMISSIONS_CHAT_FILE_UPLOAD=true`), because the pinned UI asks for it before attaching into workbench as well (§ Workbench); it, too, only shows the control and lets nothing into Open WebUI's stores. In the pinned image the files router never checks the upload permission (only the UI does), and admins pass the knowledge permission. So `edge-guard` does the enforcing: it answers `403` (JSON `detail`) to `POST`/`PUT`/`PATCH` under `/api/v1/files`, `/api/v1/knowledge` and `/api/v1/retrieval/process`, for every account, whatever the permissions say. It matches on nginx's decoded, normalized path, ignoring case. Reading and deleting existing files and knowledge bases still works, as do `…/file/remove` and `…/reset`, so anything stored before can be cleaned up. Attaching a file or pasting an image into a chat whose terminal is not Workbench goes to `/api/v1/files` and gets that `403`. With Workbench selected, the attachment goes into the user's workspace in workbench through Open WebUI's terminal proxy (`chat_uploads: filesystem`), never into Open WebUI's stores (§ Workbench). Verified against the pinned image's `routers/files.py`, `knowledge.py`, `retrieval.py`, `memories.py` and `models/config.py`; re-check the route list on an image bump.
+**No content intake.** Open WebUI is a chat UI here, not a document store: documents and personal facts belong in the apps that audit what they store. Chat file and web uploads, knowledge bases, memories and notes are therefore off (notes: § Retention). `compose.yaml` sets `USER_PERMISSIONS_CHAT_WEB_UPLOAD=false`, `USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS=false` (already the upstream default, pinned), `USER_PERMISSIONS_FEATURES_MEMORIES=false` and `ENABLE_MEMORIES=false`; with `ENABLE_PERSISTENT_CONFIG=false` these load from env on every boot. The flags only hide the controls, with one exception: `ENABLE_MEMORIES=false` the server enforces itself. The chat file upload permission is on (`USER_PERMISSIONS_CHAT_FILE_UPLOAD=true`), because the pinned UI asks for it before attaching into workbench as well (§ Workbench); it, too, only shows the control and lets nothing into Open WebUI's stores. In the pinned image the files router never checks the upload permission (only the UI does), and admins pass the knowledge permission. So `edge-guard` does the enforcing: it answers `403` (JSON `detail`) to `POST`/`PUT`/`PATCH` under `/api/v1/files`, `/api/v1/knowledge` and `/api/v1/retrieval/process`, for every account, whatever the permissions say. It matches on nginx's decoded, normalized path, ignoring case. Reading and deleting existing files and knowledge bases still works, as do `…/file/remove` and `…/reset`, so anything stored before can be cleaned up. Attaching a file or pasting an image into a chat whose terminal is not Workbench goes to `/api/v1/files` and gets that `403`, except in a temporary chat: there the browser makes no request to `/api/v1/files`; it extracts the text of a PDF or text file itself, or keeps a pasted image as a data URL, and sends it to the model inline with the message, like pasted text (`MessageInput.svelte`). Nothing reaches Open WebUI's stores, a temporary chat keeps no history, and workbench records nothing of it. `USER_PERMISSIONS_CHAT_TEMPORARY=false` would close that path; it stays at the upstream default, on, as the owner's option. With Workbench selected, the attachment goes into the user's workspace in workbench through Open WebUI's terminal proxy (`chat_uploads: filesystem`), never into Open WebUI's stores (§ Workbench). One path does reach the upload store past `edge-guard`: in a saved chat, a tool result that is exactly a base64 `data:image/…` URI is saved there as an Open WebUI file (`utils/middleware.py` `store_tool_result_image`); the retention service deletes it like any upload, the chats' period after it was created (§ Retention). Verified against the pinned image's `routers/files.py`, `knowledge.py`, `retrieval.py`, `memories.py` and `models/config.py`; re-check the route list on an image bump.
 
 **No message ratings.** Rating an answer stores a full copy of the chat with the rating (the `feedback` row's `snapshot`). The copy outlives the chat in Open WebUI's own delete, and an admin can read it through `GET /api/v1/evaluations/feedback/{id}` (any rating) and `GET /api/v1/evaluations/feedbacks/all/export`, whatever `ENABLE_ADMIN_CHAT_ACCESS` says. `compose.yaml` sets `ENABLE_MESSAGE_RATING=false` and `USER_PERMISSIONS_CHAT_RATE_RESPONSE=false`, which only hide the controls: the pinned image's `routers/evaluations.py` checks neither. So `edge-guard` refuses, with `403` (JSON `detail`) and for every account, creating or updating a rating (`POST`/`PUT`/`PATCH` under `/api/v1/evaluations/feedback`), reading a single rating (`GET`/`HEAD` `/api/v1/evaluations/feedback/<id>`) and the export, matched like the intake routes. The lists (`/feedbacks/user`, `/feedbacks/list`, `/feedbacks/all/ids`) and the leaderboard carry no snapshot and still pass, as do the deletes, so ratings stored before can be cleared; the chat sweeper also removes a chat's ratings with it. Verified against the pinned image's `routers/evaluations.py` and `models/feedbacks.py`; re-check on an image bump.
 
-**No code runs inside Open WebUI.** Open WebUI's tools and functions (pipes, filters, actions) are Python that the backend runs with `exec`, without a sandbox, with the whole database and `app.state` in reach (`utils/plugin.py`). Its code interpreter and the code blocks' "Run" button run Pyodide in the user's browser, which keeps its files in IndexedDB, where the retention service cannot delete them, and stores image output on the server past `edge-guard`. `compose.yaml` therefore sets `ENABLE_TOOLS=false`, `ENABLE_FUNCTIONS=false`, `ENABLE_CODE_INTERPRETER=false` and `ENABLE_CODE_EXECUTION=false` (which the server enforces for `/api/v1/utils/code/execute` too). Code runs only in workbench, in its sandbox: tool and terminal servers, one switch (`ENABLE_TOOL_SERVERS`), are on only for workbench's connection from `.env`, and only with its key (§ Workbench). `ENABLE_PLUGINS` stays at its default, as all three derive from it (`env.py`). Automations (`USER_PERMISSIONS_FEATURES_AUTOMATIONS=false`) and sub-agents (`ENABLE_SUBAGENTS=false`) are pinned at their upstream default. With `ENABLE_TOOLS=false` the model is also not offered the built-in `create_tool`. The pinned image enforces the two switches where the code is loaded: `load_tool_module_by_id` and `load_function_module_by_id` (`utils/plugin.py`) raise before anything runs or is stored, so create, update, restore from history and sync fail with a `400` (load-from-URL only fetches code into the editor). The routers themselves check neither switch. So, as a second layer that holds even if an image bump moves that check or the switches are dropped from compose, `edge-guard` refuses, with `403` (JSON `detail`) and for every account, `POST`/`PUT`/`PATCH` under `/api/v1/tools` and `/api/v1/functions`, matched like the intake routes. Listing, reading and the deletes (`DELETE`) still pass, so tools and functions stored before can be removed. Code execution and the code interpreter are not fixed by their switches alone: with `ENABLE_PERSISTENT_CONFIG=false`, an admin's `POST /api/v1/configs/code_execution` writes the in-memory config, which `/api/v1/utils/code/execute` and the chat middleware read per request (`routers/utils.py`, `utils/middleware.py`). Sent straight to Open WebUI it took effect at once: `/api/config` reported both on, and the execute route answered `400` instead of `403`. So `edge-guard` refuses writes (`POST`/`PUT`/`PATCH`/`DELETE`) to that route for every account, with `403` ("Configuration is set in .env in this deployment."), matched like the intake routes; reading it passes (§ Workbench). Verified against the pinned image's `env.py`, `config.py`, `utils/plugin.py`, `routers/tools.py`, `routers/functions.py`, `routers/utils.py`, `utils/tools.py` and `tools/builtin.py`, and by running it with these switches: its `/api/config` reports tools, functions, code interpreter, code execution and sub-agents off (and tool and terminal servers too while the workbench key is unset), `POST /api/v1/tools/create` sent straight to it answers `400` without running the submitted code, and `/api/v1/utils/code/execute` answers `403`. Re-check on an image bump.
+**No code runs inside Open WebUI.** Open WebUI's tools and functions (pipes, filters, actions) are Python that the backend runs with `exec`, without a sandbox, with the whole database and `app.state` in reach (`utils/plugin.py`). Its code interpreter and the code blocks' "Run" button run Pyodide in the user's browser, which keeps its files in IndexedDB, where the retention service cannot delete them, and stores image output on the server past `edge-guard`. `compose.yaml` therefore sets `ENABLE_TOOLS=false`, `ENABLE_FUNCTIONS=false`, `ENABLE_CODE_INTERPRETER=false` and `ENABLE_CODE_EXECUTION=false` (which the server enforces for `/api/v1/utils/code/execute` too). Code runs only in workbench, in its sandbox: tool and terminal servers, one switch (`ENABLE_TOOL_SERVERS`), are on only for workbench's connection from `.env`, and only with its key; Tether's personal terminals, which hang on the same switch, are refused by `edge-guard` (§ Workbench). `ENABLE_PLUGINS` stays at its default, as all three derive from it (`env.py`). Automations (`USER_PERMISSIONS_FEATURES_AUTOMATIONS=false`) and sub-agents (`ENABLE_SUBAGENTS=false`) are pinned at their upstream default. With `ENABLE_TOOLS=false` the model is also not offered the built-in `create_tool`. The pinned image enforces the two switches where the code is loaded: `load_tool_module_by_id` and `load_function_module_by_id` (`utils/plugin.py`) raise before anything runs or is stored, so create, update, restore from history and sync fail with a `400` (load-from-URL only fetches code into the editor). The routers themselves check neither switch. So, as a second layer that holds even if an image bump moves that check or the switches are dropped from compose, `edge-guard` refuses, with `403` (JSON `detail`) and for every account, `POST`/`PUT`/`PATCH` under `/api/v1/tools` and `/api/v1/functions`, matched like the intake routes. Listing, reading and the deletes (`DELETE`) still pass, so tools and functions stored before can be removed. Code execution and the code interpreter are not fixed by their switches alone: with `ENABLE_PERSISTENT_CONFIG=false`, an admin's `POST /api/v1/configs/code_execution` writes the in-memory config, which `/api/v1/utils/code/execute` and the chat middleware read per request (`routers/utils.py`, `utils/middleware.py`). Sent straight to Open WebUI it took effect at once: `/api/config` reported both on, and the execute route answered `400` instead of `403`. So `edge-guard` refuses writes (`POST`/`PUT`/`PATCH`/`DELETE`) to that route for every account, with `403` ("Configuration is set in .env in this deployment."), matched like the intake routes; reading it passes (§ Workbench). Verified against the pinned image's `env.py`, `config.py`, `utils/plugin.py`, `routers/tools.py`, `routers/functions.py`, `routers/utils.py`, `utils/tools.py` and `tools/builtin.py`, and by running it with these switches: its `/api/config` reports tools, functions, code interpreter, code execution and sub-agents off (and tool and terminal servers too while the workbench key is unset), `POST /api/v1/tools/create` sent straight to it answers `400` without running the submitted code, and `/api/v1/utils/code/execute` answers `403`. Re-check on an image bump.
 
 Persistence: **external** volume `open-webui-data` → `/app/backend/data` (SQLite DB, users, chats, uploads, RAG vectors). Declared `external: true` in `compose.yaml`, it is created out-of-band by `make volumes` (like the network) and survives every app teardown — even `docker compose down -v`; only `make nuke` removes it (container `down`, then `docker volume rm`). Destroying it wipes all app state. The `retention` sidecar mounts it too, to delete what upstream keeps forever (§ Retention).
 
@@ -129,7 +129,8 @@ edge-guard answers whatever tries.
   Unset, compose sets the switch to the empty string, which the pinned image
   reads as off (`env.py`: `os.getenv('ENABLE_TOOL_SERVERS', 'True').lower()
   == 'true'`, whose default applies only to an unset variable): no tool or
-  terminal server, and Open WebUI runs as before. The key is the value of
+  terminal server, and Open WebUI runs as before, except that the workspace
+  banner still shows (see Banner below). The key is the value of
   workbench's `OPEN_WEBUI_WORKBENCH_KEY`, at least 32 characters; deploy's
   `make env` generates it as hex. It is written into that JSON, which the
   pinned image parses at import with no fallback (`config.py`), so a quote or
@@ -145,7 +146,12 @@ edge-guard answers whatever tries.
   (`MessageInput.svelte`), Workbench selected or not, so compose sets it on
   (`USER_PERMISSIONS_CHAT_FILE_UPLOAD=true`); the server checks it for
   neither path. Without Workbench selected, an attachment goes to
-  `/api/v1/files` and meets edge-guard's `403` (§ No content intake).
+  `/api/v1/files` and meets edge-guard's `403`, except in a temporary chat:
+  there the browser extracts a PDF's or text file's text itself and sends it
+  to the model inline with the message, like pasted text. Nothing reaches
+  Open WebUI's stores, a temporary chat keeps no history, and workbench
+  records nothing of it. `USER_PERMISSIONS_CHAT_TEMPORARY=false` would close
+  that path; it stays on, as the owner's option (§ No content intake).
 - **Configuration only from `.env`.** Besides `ENABLE_PERSISTENT_CONFIG=false`,
   edge-guard refuses, with `403` (JSON `detail`) and for every account,
   `POST`/`PUT`/`PATCH`/`DELETE` under `/api/v1/configs/tool_servers` and
@@ -167,10 +173,30 @@ edge-guard answers whatever tries.
   `/api/v1/configs/code_execution` (§ No code runs inside Open WebUI). Both
   took effect at once when sent straight to Open WebUI (verified: `/api/config`
   then reported them on); reading them passes.
-  `USER_PERMISSIONS_FEATURES_DIRECT_TOOL_SERVERS=false` (the upstream default,
-  pinned) keeps users from adding tool servers of their own: the pinned image
-  drops a non-admin's `tool_servers` from a chat request without it, and
-  everyone's while direct integrations are off (`main.py`).
+- **No terminal or tool server of a user's own.** Workbench is the only
+  one, enforced in two places:
+  - Direct tool servers (added in the browser):
+    `USER_PERMISSIONS_FEATURES_DIRECT_TOOL_SERVERS=false` (the upstream
+    default, pinned). The pinned image drops a non-admin's `tool_servers` from
+    a chat request without it, and everyone's while direct integrations are
+    off (`main.py`); edge-guard keeps them off by refusing
+    `/api/v1/configs/connections`.
+  - Tether: with tool servers on, a user who opens Tether's WebSocket
+    (`/api/v1/tether/connect`) with a renewable session is offered a
+    `tether:<id>` terminal of their own beside workbench, outside its sandbox,
+    audit and retention (`utils/tether.py` `get_terminal_connections`).
+    edge-guard refuses every method under `/api/v1/tether`, for every account,
+    with `403` ("Only the workbench connection from .env is offered in this
+    deployment."). The web UI calls it only inside the Tether desktop app.
+    Verified live with a synthetic non-admin: straight to Open WebUI, the
+    hello got `ready` and `/api/v1/terminals/` listed the `tether:` terminal;
+    through the guard, the handshake got that `403` and the list held
+    workbench alone.
+
+  Renewable sessions stay mintable, a separate decision:
+  `POST /api/v1/auths/sessions` passes the guard, so a signed-in user can
+  still trade the browser token for a 90-day refresh token (§ Access).
+  Without Tether it adds no terminal.
 - **Audit.** `AUDIT_EXCLUDED_PATHS: "/terminals"`: the pinned image skips what
   `^/api(?:/v1)?/(terminals)\b` matches (`utils/audit.py`), that is the
   terminal proxy, whose URLs carry file names in their query
@@ -179,15 +205,18 @@ edge-guard answers whatever tries.
 - **Access log.** uvicorn's access log prints every URL with its query, so it
   would print those file names as well. compose passes `--no-access-log`
   (`command:`; `start.sh` hands its arguments to uvicorn in place of its own
-  `--workers 1 --ws-per-message-deflate true`, so those are repeated), and
-  sets `AUDIT_UVICORN_LOGGER_NAMES` empty. Both are needed. The flag alone
-  does not hold in v0.13.3: `start_logger()` (`utils/logger.py`), run in the
-  app's lifespan after uvicorn has set up its logging, re-attaches a handler
-  into Open WebUI's own log to every logger in `AUDIT_UVICORN_LOGGER_NAMES`
-  (default `uvicorn.access`), and uvicorn writes access lines whenever that
-  logger has one. The empty list alone does not hold either: without the
-  flag, uvicorn's own access handler prints the lines. Empty names only the
-  root logger, which already holds that handler. What still logs: Open WebUI's audit records (its own middleware), its
+  `--workers 1 --ws-per-message-deflate true`, so those are repeated, and
+  `UVICORN_WORKERS` / `UVICORN_WS_PER_MESSAGE_DEFLATE` in `.env` no longer
+  reach uvicorn; `env.py` still reads them, so change `command:` and `.env`
+  together), and sets `AUDIT_UVICORN_LOGGER_NAMES` empty. Both are needed.
+  The flag alone does not hold in v0.13.3: `start_logger()`
+  (`utils/logger.py`), run in the app's lifespan after uvicorn has set up its
+  logging, re-attaches a handler into Open WebUI's own log to every logger in
+  `AUDIT_UVICORN_LOGGER_NAMES` (default `uvicorn.access`), and uvicorn writes
+  access lines whenever that logger has one. The empty list alone does not
+  hold either: without the flag, uvicorn's own access handler prints the
+  lines. Empty names only the root logger, which already holds that handler.
+  What still logs: Open WebUI's audit records (its own middleware), its
   application log (the terminal proxy's errors name host and port, not the
   path), and edge-guard's access log, which writes the decoded path (`$uri`)
   without the query.
@@ -205,8 +234,10 @@ edge-guard answers whatever tries.
 
 Verified against the pinned image's `start.sh`, `env.py`, `config.py`,
 `models/config.py`, `main.py`, `routers/configs.py`, `routers/terminals.py`,
-`utils/audit.py`, `utils/logger.py`, `utils/terminals.py`, `utils/tools.py`
-and its frontend's `MessageInput.svelte`, and by running it in a throwaway
+`routers/tether.py`, `routers/sessions.py`, `utils/audit.py`,
+`utils/logger.py`, `utils/terminals.py`, `utils/tether.py`, `utils/tools.py`
+and its frontend's `MessageInput.svelte`, `lib/utils/index.ts` and
+`lib/utils/tether.ts`, and by running it in a throwaway
 container (no network, data in a tmpfs, a synthetic account, key and model
 stand-in): with `--no-access-log` alone every access line stayed, query
 included, and so did they with the empty logger list alone; with both none

@@ -185,6 +185,18 @@ class ComposeDefaultsTest(unittest.TestCase):
         self.assertEqual(evaluate(entries, default, "POST /api/v1/files/"), "1")
         self.assertEqual(evaluate(entries, default, "POST /api/v1/terminals/workbench/files/upload"), "0")
 
+    def test_open_webui_joins_workbench_net(self) -> None:
+        """Open WebUI reaches workbench over the external workbench-net, under the name .env may set."""
+        block = service(self.text, "open-webui")
+        networks = re.search(r"(?ms)^    networks:\n(.*?)(?=^    \S|\Z)", block)
+        self.assertIsNotNone(networks)
+        assert networks is not None
+        self.assertRegex(networks.group(1), r"(?m)^      workbench-net: \{\}$")
+        self.assertRegex(
+            self.text,
+            r"(?m)^  workbench-net:\n    external: true\n    name: \$\{WORKBENCH_NET:-workbench-net\}$",
+        )
+
     def test_direct_tool_servers_stay_off(self) -> None:
         """Users cannot connect tool servers of their own from the browser."""
         self.assertRegex(self.text, r"(?m)^ +USER_PERMISSIONS_FEATURES_DIRECT_TOOL_SERVERS: false$")
