@@ -124,6 +124,82 @@ class CodeWritesTest(unittest.TestCase):
 
 
 @unittest.skipUnless(TEMPLATE.is_file(), "needs the repo's nginx/")
+class ToolConfigWritesTest(unittest.TestCase):
+    """Tool and terminal servers come from .env; writing their configuration is refused for everyone."""
+
+    def setUp(self) -> None:
+        """Parse the map that flags those requests."""
+        self.text = TEMPLATE.read_text(encoding="utf-8")
+        self.entries, self.default = parse_map(self.text, "owui_toolconfig")
+
+    def flagged(self, request: str) -> bool:
+        """Whether the request is refused."""
+        return evaluate(self.entries, self.default, request) == "1"
+
+    def test_tool_server_config_writes_are_refused(self) -> None:
+        """Every write under both routes, with verify and the orchestrator proxies, which call a URL given to them."""
+        for request in (
+            "POST /api/v1/configs/tool_servers",
+            "POST /api/v1/configs/tool_servers/verify",
+            "POST /api/v1/configs/terminal_servers",
+            "POST /api/v1/configs/terminal_servers/verify",
+            "POST /api/v1/configs/terminal_servers/policy",
+            "POST /api/v1/configs/terminal_servers/lifecycle",
+            "POST /api/v1/configs/terminal_servers/refresh",
+            "PUT /api/v1/configs/terminal_servers",
+            "PATCH /api/v1/configs/tool_servers",
+            "DELETE /api/v1/configs/terminal_servers",
+            "post /API/V1/Configs/Terminal_Servers/verify",
+        ):
+            with self.subTest(request=request):
+                self.assertTrue(self.flagged(request))
+
+    def test_tool_server_config_reads_pass(self) -> None:
+        """Reading the configuration and writing other settings still pass."""
+        for request in (
+            "GET /api/v1/configs/tool_servers",
+            "GET /api/v1/configs/terminal_servers",
+            "POST /api/v1/configs/banners",
+            "POST /api/v1/configs/connections",
+            "POST /api/v1/configs/tool_serversx",
+        ):
+            with self.subTest(request=request):
+                self.assertFalse(self.flagged(request))
+
+    def test_a_flagged_request_answers_403(self) -> None:
+        """The flag leads to a 403 with a JSON detail, by a hand-off code of its own."""
+        handoff = re.search(r"if \(\$owui_toolconfig\) \{\s*return (\d{3});\s*\}", self.text)
+        self.assertIsNotNone(handoff)
+        assert handoff is not None
+        location = re.search(
+            r"error_page " + handoff.group(1) + r" = @(\w+);.*?location @\1 \{\s*default_type application/json;"
+            r"\s*return 403 '\{\"detail\":\"([^\"]+)\"\}';",
+            self.text,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(location)
+        assert location is not None
+        self.assertEqual(location.group(2), "Tool and terminal servers are configured in .env in this deployment.")
+        codes = re.findall(r"error_page (\d{3}) = @", self.text)
+        self.assertEqual(len(codes), len(set(codes)))
+
+    def test_the_terminal_proxy_passes_every_refusal(self) -> None:
+        """Chat attachments and the file browser reach workbench through the terminal proxy, past every map."""
+        variables = re.findall(r'^map "\$request_method \$uri" \$(\w+)', self.text, re.MULTILINE)
+        self.assertEqual(variables, ["owui_intake", "owui_rating", "owui_code", "owui_toolconfig"])
+        maps = [parse_map(self.text, variable) for variable in variables]
+        for request in (
+            "POST /api/v1/terminals/workbench/files/upload",
+            "POST /api/v1/terminals/workbench/chats/example/files/upload",
+            "GET /api/v1/terminals/workbench/files/view",
+            "POST /api/v1/terminals/workbench/tools/list_files",
+        ):
+            for entries, default in maps:
+                with self.subTest(request=request):
+                    self.assertEqual(evaluate(entries, default, request), "0")
+
+
+@unittest.skipUnless(TEMPLATE.is_file(), "needs the repo's nginx/")
 class ParserTest(unittest.TestCase):
     """The parser reads the existing maps the way nginx does."""
 

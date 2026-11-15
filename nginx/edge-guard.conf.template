@@ -78,6 +78,17 @@ map "$request_method $uri" $owui_code {
     "~*^(POST|PUT|PATCH) /api/v1/(tools|functions)(/|$)"     1;
 }
 
+# Writing the tool and terminal server configuration is refused for everyone,
+# admins included. The one connection, workbench, comes from .env
+# (TERMINAL_SERVER_CONNECTIONS; ENABLE_PERSISTENT_CONFIG is off), but these
+# routes would replace it until the next restart. Their verify routes and the
+# orchestrator proxies (policy, lifecycle, refresh) would make the server call
+# any URL given to them. Reading passes. Matched like the intake above.
+map "$request_method $uri" $owui_toolconfig {
+    default                                                                            0;
+    "~*^(POST|PUT|PATCH|DELETE) /api/v1/configs/(tool_servers|terminal_servers)(/|$)" 1;
+}
+
 server {
     listen 8080;
     server_tokens off;
@@ -136,6 +147,17 @@ server {
     location @code_refused {
         default_type application/json;
         return 403 '{"detail":"Tools and functions cannot be created or changed in this deployment."}';
+    }
+
+    # Refused tool and terminal server configuration writes (the map above)
+    # the same way; 422 is their internal hand-off.
+    error_page 422 = @toolconfig_refused;
+    if ($owui_toolconfig) {
+        return 422;
+    }
+    location @toolconfig_refused {
+        default_type application/json;
+        return 403 '{"detail":"Tool and terminal servers are configured in .env in this deployment."}';
     }
 
     location / {

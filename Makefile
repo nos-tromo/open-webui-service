@@ -26,6 +26,11 @@ INFERENCE_NET ?= $(or $(strip $(shell test -f .env && grep -E '^INFERENCE_NET=' 
 # docker/compose.yaml (networks.edge-net.name).
 EDGE_NET ?= $(or $(strip $(shell test -f .env && grep -E '^EDGE_NET=' .env | cut -d= -f2)),edge-net)
 
+# workbench's network (the federation's tool tier). Open WebUI calls workbench's
+# api there as a terminal server (CLAUDE.md § Workbench). Keep in sync with
+# docker/compose.yaml (networks.workbench-net.name).
+WORKBENCH_NET ?= $(or $(strip $(shell test -f .env && grep -E '^WORKBENCH_NET=' .env | cut -d= -f2)),workbench-net)
+
 # External data volume. Declared `external: true` in docker/compose.yaml, so it
 # must be created out-of-band (like the network) and survives `down`/`down -v`.
 # Keep in sync with docker/compose.yaml (volumes.open-webui-data).
@@ -43,7 +48,7 @@ help:
 	@echo "  cp .env.example .env   # then set OPENAI_API_KEY and EDGE_HOST"
 	@echo
 	@echo "Lifecycle:"
-	@echo "  make network    create the external $(INFERENCE_NET) and $(EDGE_NET) if missing"
+	@echo "  make network    create the external $(INFERENCE_NET), $(EDGE_NET) and $(WORKBENCH_NET) if missing"
 	@echo "  make volumes    create the external $(OPEN_WEBUI_VOLUME) if missing"
 	@echo "  make pull       pull the pinned upstream image"
 	@echo "  make bundle     save the pinned images of the latest release tag as an airgap .tar.gz"
@@ -76,6 +81,9 @@ network:
 	@docker network inspect $(EDGE_NET) >/dev/null 2>&1 \
 	  || (echo ">> creating external network $(EDGE_NET)" \
 	      && docker network create $(EDGE_NET))
+	@docker network inspect $(WORKBENCH_NET) >/dev/null 2>&1 \
+	  || (echo ">> creating external network $(WORKBENCH_NET)" \
+	      && docker network create $(WORKBENCH_NET))
 
 # Create the external data volume (one-time per host; idempotent). Declared
 # external in compose.yaml so app teardown — even `down -v` — can never delete
