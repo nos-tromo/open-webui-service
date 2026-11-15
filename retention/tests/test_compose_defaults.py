@@ -10,6 +10,8 @@ import re
 import unittest
 from pathlib import Path
 
+from tests.test_edge_guard import TEMPLATE, evaluate, parse_map
+
 COMPOSE = Path(__file__).resolve().parents[2] / "docker" / "compose.yaml"
 
 
@@ -172,10 +174,16 @@ class ComposeDefaultsTest(unittest.TestCase):
         # answer after that.
         self.assertGreaterEqual(int(match.group(1)), 60 + 120 + 300)
 
+    @unittest.skipUnless(TEMPLATE.is_file(), "needs the repo's nginx/")
     def test_users_may_attach_files_which_go_to_workbench(self) -> None:
-        """The pinned UI attaches, into workbench too, only with the upload permission; web uploads stay off."""
+        """The upload permission only shows the control; edge-guard still refuses uploads into Open WebUI's stores."""
+        # The pinned UI attaches, into workbench too, only with this permission.
         self.assertRegex(self.text, r"(?m)^ +USER_PERMISSIONS_CHAT_FILE_UPLOAD: true$")
         self.assertRegex(self.text, r"(?m)^ +USER_PERMISSIONS_CHAT_WEB_UPLOAD: false$")
+        # An attachment in a chat whose terminal is not Workbench goes to /api/v1/files and gets edge-guard's 403.
+        entries, default = parse_map(TEMPLATE.read_text(encoding="utf-8"), "owui_intake")
+        self.assertEqual(evaluate(entries, default, "POST /api/v1/files/"), "1")
+        self.assertEqual(evaluate(entries, default, "POST /api/v1/terminals/workbench/files/upload"), "0")
 
     def test_direct_tool_servers_stay_off(self) -> None:
         """Users cannot connect tool servers of their own from the browser."""
