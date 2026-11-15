@@ -90,8 +90,8 @@ Open WebUI connects to workbench, the federation's tool tier, as its one
 terminal server over the external `workbench-net`. The model reads, writes and
 runs code on the user's files there, in workbench's sandbox, and a chat with
 Workbench selected as its terminal sends its attachments into the user's
-workspace, never into Open WebUI (attaching is open to admins only, as the
-upload permission stays off). That connection, from `.env`, is the only one:
+workspace, never into Open WebUI (without it, edge-guard refuses the upload).
+That connection, from `.env`, is the only one:
 edge-guard refuses the admin routes that would change tool or terminal
 servers, and users cannot add their own. A second banner tells every user that
 workspace files are deleted `WORKBENCH_RETENTION_DAYS` days after they were

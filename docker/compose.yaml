@@ -197,8 +197,11 @@ services:
       # the upstream default, pinned like the telemetry opt-outs below).
       # The enforcement is edge-guard's: upstream checks the upload
       # permission only in its UI and lets admins past the knowledge one,
-      # so the guard refuses those endpoints for everyone.
-      USER_PERMISSIONS_CHAT_FILE_UPLOAD: false
+      # so the guard refuses those endpoints for everyone. The file upload
+      # permission alone is on: the pinned UI asks for it before attaching
+      # into workbench as well (§ Workbench), and an attachment headed for
+      # Open WebUI's own store still meets the guard's 403.
+      USER_PERMISSIONS_CHAT_FILE_UPLOAD: true
       USER_PERMISSIONS_CHAT_WEB_UPLOAD: false
       USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS: false
       USER_PERMISSIONS_FEATURES_MEMORIES: false

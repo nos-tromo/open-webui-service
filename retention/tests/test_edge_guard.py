@@ -200,6 +200,18 @@ class ToolConfigWritesTest(unittest.TestCase):
 
 
 @unittest.skipUnless(TEMPLATE.is_file(), "needs the repo's nginx/")
+class IntakeTest(unittest.TestCase):
+    """Uploads into Open WebUI's own stores are refused whatever the UI offers."""
+
+    def test_uploads_into_open_webui_are_refused(self) -> None:
+        """With the upload permission on, an attachment outside workbench still meets edge-guard's refusal."""
+        entries, default = parse_map(TEMPLATE.read_text(encoding="utf-8"), "owui_intake")
+        for request in ("POST /api/v1/files/", "POST /api/v1/files", "PUT /api/v1/files/example/data/content/update"):
+            with self.subTest(request=request):
+                self.assertEqual(evaluate(entries, default, request), "1")
+
+
+@unittest.skipUnless(TEMPLATE.is_file(), "needs the repo's nginx/")
 class ParserTest(unittest.TestCase):
     """The parser reads the existing maps the way nginx does."""
 

@@ -172,6 +172,11 @@ class ComposeDefaultsTest(unittest.TestCase):
         # answer after that.
         self.assertGreaterEqual(int(match.group(1)), 60 + 120 + 300)
 
+    def test_users_may_attach_files_which_go_to_workbench(self) -> None:
+        """The pinned UI attaches, into workbench too, only with the upload permission; web uploads stay off."""
+        self.assertRegex(self.text, r"(?m)^ +USER_PERMISSIONS_CHAT_FILE_UPLOAD: true$")
+        self.assertRegex(self.text, r"(?m)^ +USER_PERMISSIONS_CHAT_WEB_UPLOAD: false$")
+
     def test_direct_tool_servers_stay_off(self) -> None:
         """Users cannot connect tool servers of their own from the browser."""
         self.assertRegex(self.text, r"(?m)^ +USER_PERMISSIONS_FEATURES_DIRECT_TOOL_SERVERS: false$")
