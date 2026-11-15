@@ -188,7 +188,7 @@ class ToolConfigWritesTest(unittest.TestCase):
     def test_the_terminal_proxy_passes_every_refusal(self) -> None:
         """Chat attachments and the file browser reach workbench through the terminal proxy, past every map."""
         variables = re.findall(r'^map "\$request_method \$uri" \$(\w+)', self.text, re.MULTILINE)
-        self.assertEqual(variables, ["owui_intake", "owui_rating", "owui_code", "owui_toolconfig", "owui_configimport"])
+        self.assertEqual(variables, ["owui_intake", "owui_rating", "owui_code", "owui_toolconfig", "owui_config"])
         maps = [parse_map(self.text, variable) for variable in variables]
         for request in (
             "POST /api/v1/terminals/workbench/files/upload",
@@ -202,20 +202,20 @@ class ToolConfigWritesTest(unittest.TestCase):
 
 
 @unittest.skipUnless(TEMPLATE.is_file(), "needs the repo's nginx/")
-class ConfigImportTest(unittest.TestCase):
-    """The configuration import, which writes any key, the workbench connection among them, is refused for everyone."""
+class ConfigWritesTest(unittest.TestCase):
+    """Settings routes that would override .env at runtime are refused for everyone; reading them passes."""
 
     def setUp(self) -> None:
-        """Parse the map that flags the import."""
+        """Parse the map that flags those writes."""
         self.text = TEMPLATE.read_text(encoding="utf-8")
-        self.entries, self.default = parse_map(self.text, "owui_configimport")
+        self.entries, self.default = parse_map(self.text, "owui_config")
 
     def flagged(self, request: str) -> bool:
         """Whether the request is refused."""
         return evaluate(self.entries, self.default, request) == "1"
 
     def test_the_config_import_is_refused(self) -> None:
-        """Every write to the import route, however it is spelled."""
+        """Every write to the import route, which writes any key, however it is spelled."""
         for request in (
             "POST /api/v1/configs/import",
             "POST /api/v1/configs/import/",
@@ -225,19 +225,32 @@ class ConfigImportTest(unittest.TestCase):
             with self.subTest(request=request):
                 self.assertTrue(self.flagged(request))
 
-    def test_the_export_and_other_settings_pass(self) -> None:
-        """Reading the configuration and the other settings routes pass."""
+    def test_code_execution_and_connections_writes_are_refused(self) -> None:
+        """They would switch code execution, the code interpreter and direct connections on until a restart."""
+        for route in ("code_execution", "connections"):
+            for method in ("POST", "PUT", "PATCH", "DELETE"):
+                with self.subTest(request=f"{method} {route}"):
+                    self.assertTrue(self.flagged(f"{method} /api/v1/configs/{route}"))
+        for request in ("post /API/V1/Configs/Code_Execution", "POST /api/v1/configs/connections/"):
+            with self.subTest(request=request):
+                self.assertTrue(self.flagged(request))
+
+    def test_reads_and_other_settings_pass(self) -> None:
+        """Reading the configuration, these routes included, and the other settings routes pass."""
         for request in (
             "GET /api/v1/configs/export",
+            "GET /api/v1/configs/code_execution",
+            "GET /api/v1/configs/connections",
             "POST /api/v1/configs/banners",
             "POST /api/v1/configs/importx",
+            "POST /api/v1/configs/connectionsx",
         ):
             with self.subTest(request=request):
                 self.assertFalse(self.flagged(request))
 
     def test_a_flagged_request_answers_403(self) -> None:
         """The flag leads to a 403 with a JSON detail, by a hand-off code of its own."""
-        handoff = re.search(r"if \(\$owui_configimport\) \{\s*return (\d{3});\s*\}", self.text)
+        handoff = re.search(r"if \(\$owui_config\) \{\s*return (\d{3});\s*\}", self.text)
         self.assertIsNotNone(handoff)
         assert handoff is not None
         location = re.search(

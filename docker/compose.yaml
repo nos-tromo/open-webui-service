@@ -234,8 +234,10 @@ services:
       # the retention service. Code runs only in workbench (below), the one
       # tool server. Open WebUI enforces ENABLE_TOOLS and ENABLE_FUNCTIONS
       # where the code is loaded (utils/plugin.py); edge-guard refuses the
-      # writes to the tools and functions routers as a second layer.
-      # Automations and sub-agents are pinned at their upstream default, off.
+      # writes to the tools and functions routers as a second layer, and to
+      # the code execution settings, which would switch the last two on at
+      # runtime. Automations and sub-agents are pinned at their upstream
+      # default, off.
       ENABLE_TOOLS: false
       ENABLE_FUNCTIONS: false
       ENABLE_CODE_INTERPRETER: false

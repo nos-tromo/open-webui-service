@@ -91,13 +91,16 @@ map "$request_method $uri" $owui_toolconfig {
     "~*^(POST|PUT|PATCH|DELETE) /api/v1/configs/oauth/clients(/|$)"                    1;
 }
 
-# The configuration import is refused for everyone, admins included. It writes
-# any key it is given, the workbench connection among them, and with
-# ENABLE_PERSISTENT_CONFIG off it lasts only until the next restart, so it has
-# no use here. The export still passes. Matched like the intake above.
-map "$request_method $uri" $owui_configimport {
-    default                                                       0;
-    "~*^(POST|PUT|PATCH|DELETE) /api/v1/configs/import(/|$)"      1;
+# Settings that .env decides are not written at runtime, by anyone, admins
+# included. With ENABLE_PERSISTENT_CONFIG off a write lasts only until the next
+# restart, but takes effect at once: the import writes any key it is given,
+# the workbench connection among them; code_execution switches code execution
+# and the code interpreter on; connections switches direct connections and
+# direct tool server integrations on. Reading passes, as does the export.
+# Matched like the intake above.
+map "$request_method $uri" $owui_config {
+    default                                                                              0;
+    "~*^(POST|PUT|PATCH|DELETE) /api/v1/configs/(import|code_execution|connections)(/|$)" 1;
 }
 
 server {
@@ -171,13 +174,13 @@ server {
         return 403 '{"detail":"Tool and terminal servers are configured in .env in this deployment."}';
     }
 
-    # The refused configuration import (the map above) the same way; 423 is
-    # its internal hand-off.
-    error_page 423 = @configimport_refused;
-    if ($owui_configimport) {
+    # Refused settings writes (the map above) the same way; 423 is their
+    # internal hand-off.
+    error_page 423 = @config_refused;
+    if ($owui_config) {
         return 423;
     }
-    location @configimport_refused {
+    location @config_refused {
         default_type application/json;
         return 403 '{"detail":"Configuration is set in .env in this deployment."}';
     }
