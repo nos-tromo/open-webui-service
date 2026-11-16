@@ -255,8 +255,18 @@ services:
       # configuration routes for tool and terminal servers, and the
       # configuration import), and it is the only one: edge-guard refuses
       # Tether, which would add a terminal of a user's own.
+      # The chat context (server_type orchestrator, contexts.chat) makes the
+      # browser hold an attachment of a new chat until the chat is saved, so
+      # it lands in the chat's folder, not in workbench's "default"; without a
+      # policy_id the flag changes nothing else in the pinned image.
       ENABLE_TOOL_SERVERS: ${OPEN_WEBUI_WORKBENCH_KEY:+true}
-      TERMINAL_SERVER_CONNECTIONS: '[{"id":"workbench","name":"Workbench","enabled":true,"url":"${WORKBENCH_URL:-http://workbench-api:8000}","path":"/openapi.json","key":"${OPEN_WEBUI_WORKBENCH_KEY:-}","auth_type":"bearer","config":{"chat_uploads":"filesystem","access_grants":[{"principal_type":"user","principal_id":"*","permission":"read"}]}}]'
+      TERMINAL_SERVER_CONNECTIONS: '[{"id":"workbench","name":"Workbench","enabled":true,"server_type":"orchestrator","url":"${WORKBENCH_URL:-http://workbench-api:8000}","path":"/openapi.json","key":"${OPEN_WEBUI_WORKBENCH_KEY:-}","auth_type":"bearer","config":{"chat_uploads":"filesystem","contexts":{"chat":{"context_id":"chat_id"}},"access_grants":[{"principal_type":"user","principal_id":"*","permission":"read"}]}}]'
+      # Workbench is selected in every new chat (each model's default
+      # terminal; without the key it is unavailable and ignored), and files
+      # the model displays show in its answer, not in the hidden side panel.
+      # Both are defaults: a model or an account may set its own.
+      DEFAULT_MODEL_METADATA: '{"terminalId":"workbench"}'
+      DEFAULT_INTERFACE_SETTINGS: '{"terminalFileDisplay":"inline"}'
       # No tool servers of a user's own, added from the browser.
       USER_PERMISSIONS_FEATURES_DIRECT_TOOL_SERVERS: false
       # How long Open WebUI waits for a tool call (upstream: no limit). Longer

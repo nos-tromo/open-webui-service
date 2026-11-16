@@ -118,12 +118,23 @@ edge-guard answers whatever tries.
 
 - **The connection** is `TERMINAL_SERVER_CONNECTIONS` in `compose.yaml`, one
   entry: id `workbench`, the `/openapi.json` spec, `auth_type: bearer` with
-  `OPEN_WEBUI_WORKBENCH_KEY`, `chat_uploads: filesystem`, and a read grant for
-  every user (`principal_id: "*"`). workbench's contract stack
+  `OPEN_WEBUI_WORKBENCH_KEY`, `chat_uploads: filesystem`, a chat context
+  (`server_type: orchestrator`, `contexts.chat.context_id: chat_id`) and a
+  read grant for every user (`principal_id: "*"`). workbench's contract stack
   (`contract/compose.yaml` there) runs the same connection against the same
   pinned image; keep the two identical apart from the url and key variables.
   Every call made for a user names the account (`X-User-Id`), so each
-  account has a workspace of its own.
+  account has a workspace of its own, and the chat (`X-Session-Id`), so each
+  chat a folder of its own. The chat context exists for one effect: the
+  browser holds an attachment of a chat not saved yet until the first
+  message saves it, then uploads it into that chat's folder. Without it the
+  upload went out at once, with no chat id, into workbench's `default`
+  folder, which the chat's tools (`list_files`, `search_files`,
+  `run_python`) never see. `orchestrator` is upstream's name for another
+  kind of server; in the pinned image, without a `policy_id`, it changes
+  only the chat context (`utils/terminals.py`): proxy calls with a chat id
+  also carry `X-Terminal-Context-Id`, and `system/info` wants a saved chat.
+  An image bump may give it more meaning; the contract tests catch that.
 - **The key decides the switch:** `ENABLE_TOOL_SERVERS:
   ${OPEN_WEBUI_WORKBENCH_KEY:+true}`, the pattern of the forwarding secret.
   Unset, compose sets the switch to the empty string, which the pinned image
@@ -137,11 +148,17 @@ edge-guard answers whatever tries.
   backslash in it stops Open WebUI from starting. With the key set and
   workbench down, Open WebUI starts (logging two `ERROR`s: no spec) and plain
   chats work.
-- **Chat attachments** go into the user's workspace through Open WebUI's
-  terminal proxy (`/api/v1/terminals/workbench/…/files/upload`) once the
-  chat has Workbench selected as its terminal (the browser remembers the
-  choice), never into Open WebUI's stores. Every edge-guard map lets the
-  proxy pass. The pinned UI's attach button, its upload handler and dropping
+- **Chat attachments** go into the chat's folder in the user's workspace
+  through Open WebUI's terminal proxy
+  (`/api/v1/terminals/workbench/…/files/upload`) once the chat has Workbench
+  selected as its terminal, never into Open WebUI's stores. Every new chat
+  has it selected: `DEFAULT_MODEL_METADATA` makes workbench every model's
+  default terminal (`meta.terminalId`, merged into each model in
+  `utils/models.py`, applied to a new chat in `Chat.svelte` only while the
+  terminal is available, so without the key it is ignored); a user may
+  still switch it off for a chat. A temporary chat is never offered
+  Workbench, as its chat is never saved (`TerminalMenu.svelte`). Every
+  edge-guard map lets the proxy pass. The pinned UI's attach button, its upload handler and dropping
   a terminal file into a chat all require the upload permission
   (`MessageInput.svelte`), Workbench selected or not, so compose sets it on
   (`USER_PERMISSIONS_CHAT_FILE_UPLOAD=true`); the server checks it for
@@ -225,6 +242,18 @@ edge-guard answers whatever tries.
   deleted that many days after they were added (English, and German via
   `de-DE`). The period belongs to workbench, which deletes the files; deploy's
   `make env` copies it here.
+- **Finding files.** The pinned UI keeps the workspace out of sight: its
+  file browser is a tab ("Files") behind the chat header's "Tabs" button and
+  that tab bar's "+" (`chat/Navbar.svelte`, `ChatTabs.svelte`), and the
+  "Choose working directory" picker by the input lists folders only
+  (`FileNav.svelte` with `onSelectDirectory`), so its folders look empty.
+  When the model shows a file (`display_file`), the default `sidebar` display
+  opens it in that tab, except after a message with a workbench attachment
+  (`Chat.svelte` `terminalEventHandler`), the usual case. So
+  `DEFAULT_INTERFACE_SETTINGS` makes `terminalFileDisplay: inline` every
+  account's default (`routers/users.py`, personal settings win): a displayed
+  file shows in the answer. A single file downloads (`/files/view`); a
+  folder does not, as workbench has no `/files/archive`.
 - **Timeout.** `AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER=480`. The pinned image's
   tool calls (`execute_tool_server`, `utils/tools.py`) wait that long, and
   without it forever (`AIOHTTP_CLIENT_TIMEOUT` is unset). It must exceed what
@@ -234,15 +263,22 @@ edge-guard answers whatever tries.
 
 Verified against the pinned image's `start.sh`, `env.py`, `config.py`,
 `models/config.py`, `main.py`, `routers/configs.py`, `routers/terminals.py`,
-`routers/tether.py`, `routers/sessions.py`, `utils/audit.py`,
-`utils/logger.py`, `utils/terminals.py`, `utils/tether.py`, `utils/tools.py`
-and its frontend's `MessageInput.svelte`, `lib/utils/index.ts` and
-`lib/utils/tether.ts`, and by running it in a throwaway
+`routers/tether.py`, `routers/sessions.py`, `routers/users.py`,
+`utils/audit.py`, `utils/logger.py`, `utils/models.py`, `utils/terminals.py`,
+`utils/tether.py`, `utils/tools.py` and its frontend's `MessageInput.svelte`,
+`TerminalMenu.svelte`, `Chat.svelte`, `ChatTabs.svelte`, `FileNav.svelte`,
+`lib/apis/terminal/index.ts`, `lib/utils/index.ts` and `lib/utils/tether.ts`,
+and by running it in a throwaway
 container (no network, data in a tmpfs, a synthetic account, key and model
 stand-in): with `--no-access-log` alone every access line stayed, query
 included, and so did they with the empty logger list alone; with both none
-did, the audit records stayed and nothing else in the log changed. Re-check
-on an image bump.
+did, the audit records stayed and nothing else in the log changed. The chat
+context and the two defaults were run in workbench's contract stack with a
+synthetic account: a new chat had Workbench selected; an attachment made
+before the first message landed in `default` without the chat context and
+in the chat's folder with it; a temporary chat, also one opened after a
+saved chat, had no terminal and kept its attachment local; without the key
+nothing was selected and chats ran as before. Re-check on an image bump.
 
 ## Retention
 

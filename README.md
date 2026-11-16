@@ -89,9 +89,13 @@ With `OPEN_WEBUI_WORKBENCH_KEY` set (the same value as in workbench's `.env`),
 Open WebUI connects to workbench, the federation's tool tier, as its one
 terminal server over the external `workbench-net`. The model reads, writes and
 runs code on the user's files there, in workbench's sandbox, and a chat with
-Workbench selected as its terminal sends its attachments into the user's
-workspace, never into Open WebUI. Without it, edge-guard refuses the upload,
-except in a temporary chat: there the browser sends a PDF's or text file's text
+Workbench selected as its terminal sends its attachments into that chat's
+folder in the user's workspace, never into Open WebUI. Every new chat starts
+with Workbench selected, and a file the model shows appears in its answer,
+where it can be downloaded; the full file browser is the "Files" tab, behind
+the chat header's "Tabs" button and "+". Without Workbench selected, edge-guard
+refuses the upload, except in a temporary chat, which is never offered
+Workbench: there the browser sends a PDF's or text file's text
 to the model inline with the message, like pasted text, and nothing is stored
 (a temporary chat keeps no history, and workbench records nothing of it;
 `USER_PERMISSIONS_CHAT_TEMPORARY=false` would close that path, as the owner's

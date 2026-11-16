@@ -105,7 +105,7 @@ class ComposeDefaultsTest(unittest.TestCase):
         self.assertNotRegex(self.text, r"(?m)^ +ENABLE_PLUGINS:")
 
     def test_one_workbench_connection_with_filesystem_uploads(self) -> None:
-        """TERMINAL_SERVER_CONNECTIONS is workbench alone: bearer key, chat uploads into it, every user."""
+        """TERMINAL_SERVER_CONNECTIONS is workbench alone: bearer key, chat uploads into the chat's folder, every user."""
         match = re.search(r"^ +TERMINAL_SERVER_CONNECTIONS: '(.*)'$", self.text, re.MULTILINE)
         self.assertIsNotNone(match)
         assert match is not None
@@ -122,16 +122,29 @@ class ComposeDefaultsTest(unittest.TestCase):
                 "id": "workbench",
                 "name": "Workbench",
                 "enabled": True,
+                "server_type": "orchestrator",
                 "url": "http://workbench-api:8000",
                 "path": "/openapi.json",
                 "key": "synthetic-key",
                 "auth_type": "bearer",
                 "config": {
                     "chat_uploads": "filesystem",
+                    "contexts": {"chat": {"context_id": "chat_id"}},
                     "access_grants": [{"principal_type": "user", "principal_id": "*", "permission": "read"}],
                 },
             },
         )
+
+    def test_workbench_is_preselected_and_shows_files_inline(self) -> None:
+        """Every model selects workbench for a new chat, and every account sees displayed files in the answer."""
+        for name, expected in (
+            ("DEFAULT_MODEL_METADATA", {"terminalId": "workbench"}),
+            ("DEFAULT_INTERFACE_SETTINGS", {"terminalFileDisplay": "inline"}),
+        ):
+            match = re.search(rf"(?m)^ +{name}: '(.*)'$", self.text)
+            self.assertIsNotNone(match, name)
+            assert match is not None
+            self.assertEqual(json.loads(match.group(1)), expected)
 
     def test_terminal_proxy_is_excluded_from_open_webui_audit(self) -> None:
         """Open WebUI's audit skips the terminal proxy, whose URLs carry file names, and nothing else."""
