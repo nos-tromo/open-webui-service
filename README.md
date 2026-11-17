@@ -1,5 +1,8 @@
 # open-webui-service
 
+> **Deprecated:** being retired in favour of
+> [Ghostwriter](https://github.com/nos-tromo/ghostwriter); a banner tells every user.
+
 A thin **deployment wrapper** for [Open WebUI](https://github.com/open-webui/open-webui).
 No Open WebUI source lives here — the repo is Docker Compose config that runs a
 **pinned** upstream image (`ghcr.io/open-webui/open-webui`, fixed by tag **and**

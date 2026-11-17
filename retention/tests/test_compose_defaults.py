@@ -64,14 +64,14 @@ class ComposeDefaultsTest(unittest.TestCase):
                 self.assertRegex(self.text, rf"(?m)^ +{re.escape(line)}$")
 
     def test_the_banners_name_the_periods_in_english_and_german(self) -> None:
-        """WEBUI_BANNERS is two info banners: the chats' period and the workspace's, each from its own variable."""
+        """WEBUI_BANNERS is two info banners, the chats' period and the workspace's, then the retirement warning."""
         match = re.search(r"^ +WEBUI_BANNERS: '(.*)'$", self.text, re.MULTILINE)
         self.assertIsNotNone(match)
         assert match is not None
         raw = match.group(1)
         self.assertEqual(raw.count("${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365}"), 3)
         self.assertEqual(raw.count("${WORKBENCH_RETENTION_DAYS:-7}"), 3)
-        chats, workspace = json.loads(
+        chats, workspace, retiring = json.loads(
             raw.replace("${OPEN_WEBUI_CHAT_RETENTION_DAYS:-365}", "365").replace("${WORKBENCH_RETENTION_DAYS:-7}", "7")
         )
         self.assertEqual(
@@ -93,6 +93,24 @@ class ComposeDefaultsTest(unittest.TestCase):
         self.assertEqual(
             workspace["i18n"],
             {"de-DE": {"content": "Dateien im Arbeitsbereich werden 7 Tage nach dem Hinzufügen gelöscht."}},
+        )
+        self.assertEqual(
+            {key: retiring[key] for key in ("id", "type", "dismissible")},
+            {"id": "retiring", "type": "warning", "dismissible": False},
+        )
+        self.assertIsInstance(retiring["timestamp"], int)
+        self.assertEqual(
+            retiring["content"],
+            "Open WebUI is being retired. Please use Ghostwriter, the ‘Agentic chat assistant’ tile in the portal.",
+        )
+        self.assertEqual(
+            retiring["i18n"],
+            {
+                "de-DE": {
+                    "content": "Open WebUI wird abgeschaltet. Bitte nutzen Sie Ghostwriter, "
+                    "die Kachel ‚Agentischer Chatassistent‘ im Portal."
+                }
+            },
         )
 
     def test_tool_servers_follow_the_key(self) -> None:
