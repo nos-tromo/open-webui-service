@@ -241,7 +241,8 @@ edge-guard answers whatever tries.
   `workspace-period-${WORKBENCH_RETENTION_DAYS:-7}`: workspace files are
   deleted that many days after they were added (English, and German via
   `de-DE`). The period belongs to workbench, which deletes the files; deploy's
-  `make env` copies it here.
+  `make env` copies it here. A third, a warning that cannot be dismissed,
+  says Open WebUI is being retired in favour of Ghostwriter.
 - **Finding files.** The pinned UI keeps the workspace out of sight: its
   file browser is a tab ("Files") behind the chat header's "Tabs" button and
   that tab bar's "+" (`chat/Navbar.svelte`, `ChatTabs.svelte`), and the
